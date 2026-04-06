@@ -33,9 +33,9 @@ from typing import Any
 import httpx
 import structlog
 
-from akuvox_api.clients.base import AkuvoxClientBase
-from akuvox_api.clients.local.auth import build_auth
-from akuvox_api.clients.local.parsers import (
+from pyakuvox.clients.base import AkuvoxClientBase
+from pyakuvox.clients.local.auth import build_auth
+from pyakuvox.clients.local.parsers import (
     parse_call_logs,
     parse_device_info,
     parse_device_status,
@@ -45,20 +45,20 @@ from akuvox_api.clients.local.parsers import (
     parse_schedules,
     parse_users,
 )
-from akuvox_api.config import LocalSettings
-from akuvox_api.exceptions import (
+from pyakuvox.config import LocalSettings
+from pyakuvox.exceptions import (
     AuthenticationError,
     ConnectionError,
     DeviceError,
     ParseError,
     TimeoutError,
 )
-from akuvox_api.logging_config import redact_headers
-from akuvox_api.models.device import DeviceInfo, DeviceStatus, RelayState
-from akuvox_api.models.events import CallEvent, DoorEvent, RelayActionResult
-from akuvox_api.models.firmware import FirmwareInfo
-from akuvox_api.models.schedules import Schedule
-from akuvox_api.models.users import UserCode
+from pyakuvox.logging_config import redact_headers
+from pyakuvox.models.device import DeviceInfo, DeviceStatus, RelayState
+from pyakuvox.models.events import CallEvent, DoorEvent, RelayActionResult
+from pyakuvox.models.firmware import FirmwareInfo
+from pyakuvox.models.schedules import Schedule
+from pyakuvox.models.users import UserCode
 
 logger = structlog.get_logger(__name__)
 

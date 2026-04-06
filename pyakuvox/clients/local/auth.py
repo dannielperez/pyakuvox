@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import httpx
 
-from akuvox_api.config import LocalAuthType, LocalSettings
+from pyakuvox.config import LocalAuthType, LocalSettings
 
 
 def build_auth(settings: LocalSettings) -> httpx.Auth | None:

@@ -1,4 +1,4 @@
-# akuvox-api
+# pyakuvox
 
 Proof-of-concept Python library for Akuvox intercom device integration via the local HTTP API.
 
@@ -11,8 +11,8 @@ Reverse-engineered from real hardware (X916S, R29C) — no official Akuvox SDK o
 Communicate directly with Akuvox devices on the LAN via their built-in HTTP API.
 
 ```python
-from akuvox_api.clients.local import LocalClient
-from akuvox_api.config import get_settings
+from pyakuvox.clients.local import LocalClient
+from pyakuvox.config import get_settings
 
 settings = get_settings()
 async with LocalClient(settings.local) as client:
@@ -46,7 +46,7 @@ async with LocalClient(settings.local) as client:
 Configure the device's HTTP API settings (auth mode, credentials, IP whitelist) via the web management interface. This is needed before the API client can connect — Akuvox devices ship with IP whitelist auth that blocks all API access.
 
 ```python
-from akuvox_api.clients.local import WebUIClient, FirmwareAuthMode
+from pyakuvox.clients.local import WebUIClient, FirmwareAuthMode
 
 async with WebUIClient(host="192.168.1.100") as webui:
     await webui.login("admin", "password")
@@ -82,7 +82,7 @@ async with WebUIClient(host="192.168.1.100") as webui:
 Scan the network for Akuvox devices using TCP connect probes and HTTP fingerprinting. Works over VPN (no multicast/broadcast required).
 
 ```python
-from akuvox_api.discovery import scan_targets
+from pyakuvox.discovery import scan_targets
 
 # Scan a subnet
 devices = await scan_targets(
@@ -135,7 +135,7 @@ Key settings:
 ## Project Structure
 
 ```
-akuvox_api/
+pyakuvox/
 ├── clients/
 │   ├── base.py              # Abstract client interface
 │   └── local/

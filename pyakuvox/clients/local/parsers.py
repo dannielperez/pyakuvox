@@ -10,8 +10,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from akuvox_api.exceptions import ParseError
-from akuvox_api.models.device import (
+from pyakuvox.exceptions import ParseError
+from pyakuvox.models.device import (
     DeviceIdentity,
     DeviceInfo,
     DeviceSource,
@@ -19,16 +19,16 @@ from akuvox_api.models.device import (
     OnlineStatus,
     RelayState,
 )
-from akuvox_api.models.events import (
+from pyakuvox.models.events import (
     CallEvent,
     DoorEvent,
     EventSource,
     EventType,
     RelayActionResult,
 )
-from akuvox_api.models.firmware import FirmwareInfo
-from akuvox_api.models.schedules import Schedule, ScheduleType
-from akuvox_api.models.users import UserCode
+from pyakuvox.models.firmware import FirmwareInfo
+from pyakuvox.models.schedules import Schedule, ScheduleType
+from pyakuvox.models.users import UserCode
 
 
 def parse_device_info(data: dict[str, Any], ip_address: str = "") -> DeviceInfo:

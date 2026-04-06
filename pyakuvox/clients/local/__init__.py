@@ -4,8 +4,8 @@
 - ``WebUIClient``: Configures the device via its web management interface.
 """
 
-from akuvox_api.clients.local.client import LocalClient
-from akuvox_api.clients.local.webui import (
+from pyakuvox.clients.local.client import LocalClient
+from pyakuvox.clients.local.webui import (
     FirmwareAuthMode,
     HttpApiConfig,
     WebUIClient,

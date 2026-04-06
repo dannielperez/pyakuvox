@@ -32,12 +32,12 @@ from typing import Any
 import httpx
 import structlog
 
-from akuvox_api.clients.local.encoding import (
+from pyakuvox.clients.local.encoding import (
     encode_config_password,
     encode_login_password,
     post_encode,
 )
-from akuvox_api.exceptions import AuthenticationError, ConnectionError, DeviceError
+from pyakuvox.exceptions import AuthenticationError, ConnectionError, DeviceError
 
 logger = structlog.get_logger(__name__)
 

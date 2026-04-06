@@ -1,4 +1,4 @@
-"""Exception hierarchy for akuvox-api.
+"""Exception hierarchy for pyakuvox.
 
 All exceptions derive from AkuvoxError so callers can catch broadly
 or narrowly as needed. The hierarchy mirrors the one in pylocal-akuvox
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 
 class AkuvoxError(Exception):
-    """Base exception for all akuvox-api errors."""
+    """Base exception for all pyakuvox errors."""
 
 
 # ── Transport / connectivity ────────────────────────────────────────

@@ -4,7 +4,7 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-akuvox-api = {extras = ["dev"], file = ".", editable = true}
+pyakuvox = {extras = ["dev"], file = ".", editable = true}
 
 [dev-packages]
 

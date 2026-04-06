@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "e88ea3f555b0257bcac564a78808b8f23658931a88b926cc8ff58db24823e4db"
+            "sha256": "56c0dbd855addd6584f09c90d15265eae26b94ded24da3d15483aab7fd181030"
         },
         "pipfile-spec": 6,
         "requires": {
@@ -17,13 +17,6 @@
         ]
     },
     "default": {
-        "akuvox-api": {
-            "editable": true,
-            "extras": [
-                "dev"
-            ],
-            "file": "."
-        },
         "annotated-doc": {
             "hashes": [
                 "sha256:571ac1dc6991c450b25a9c2d84a3705e2ae7a53467b5d111c24fa8baabbed320",
@@ -461,6 +454,13 @@
                 "sha256:eb545fcff725875197837263e977ea257a402056661f09dae08e4b149b030a61"
             ],
             "version": "==4.5.1"
+        },
+        "pyakuvox": {
+            "editable": true,
+            "extras": [
+                "dev"
+            ],
+            "file": "."
         },
         "pydantic": {
             "hashes": [

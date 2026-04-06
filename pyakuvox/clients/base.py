@@ -5,11 +5,11 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from akuvox_api.models.device import DeviceInfo, DeviceStatus, RelayState
-from akuvox_api.models.events import CallEvent, DoorEvent, RelayActionResult
-from akuvox_api.models.firmware import FirmwareInfo
-from akuvox_api.models.schedules import Schedule
-from akuvox_api.models.users import UserCode
+from pyakuvox.models.device import DeviceInfo, DeviceStatus, RelayState
+from pyakuvox.models.events import CallEvent, DoorEvent, RelayActionResult
+from pyakuvox.models.firmware import FirmwareInfo
+from pyakuvox.models.schedules import Schedule
+from pyakuvox.models.users import UserCode
 
 
 class AkuvoxClientBase(ABC):

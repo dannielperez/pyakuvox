@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "akuvox-api"
+name = "pyakuvox"
 version = "0.1.0"
 description = "Proof-of-concept Python library for Akuvox intercom integration (local + cloud research)"
 readme = "README.md"
@@ -45,10 +45,10 @@ dev = [
 ]
 
 [project.scripts]
-akuvox = "akuvox_api.cli.main:app"
+akuvox = "pyakuvox.cli.main:app"
 
 [tool.hatch.build.targets.wheel]
-packages = ["akuvox_api"]
+packages = ["pyakuvox"]
 
 [tool.ruff]
 target-version = "py312"
