@@ -28,11 +28,13 @@ Unverified / experimental:
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import httpx
 import structlog
 
+from pyakuvox.capabilities import Provider, SupportLevel, build_default_matrix
 from pyakuvox.clients.base import AkuvoxClientBase
 from pyakuvox.clients.local.auth import build_auth
 from pyakuvox.clients.local.parsers import (
@@ -50,8 +52,10 @@ from pyakuvox.exceptions import (
     AuthenticationError,
     ConnectionError,
     DeviceError,
+    ExperimentalFeatureWarning,
     ParseError,
     TimeoutError,
+    UnsupportedFeatureError,
 )
 from pyakuvox.logging_config import redact_headers
 from pyakuvox.models.device import DeviceInfo, DeviceStatus, RelayState
@@ -62,15 +66,40 @@ from pyakuvox.models.users import UserCode
 
 logger = structlog.get_logger(__name__)
 
+# Transient HTTP status codes eligible for retry.
+_TRANSIENT_STATUS_CODES = frozenset({502, 503, 504})
+
+# Default retry configuration.
+_DEFAULT_MAX_RETRIES = 3
+_DEFAULT_RETRY_BACKOFF = 0.5  # seconds; doubles each attempt
+
+# Pagination hard ceiling to prevent infinite loops on misbehaving devices.
+_MAX_PAGES = 100
+
 
 class LocalClient(AkuvoxClientBase):
-    """HTTP client for direct LAN communication with Akuvox devices."""
+    """HTTP client for direct LAN communication with Akuvox devices.
 
-    def __init__(self, settings: LocalSettings) -> None:
+    Args:
+        settings: Connection settings (host, port, auth, timeouts).
+        max_retries: Number of retries for transient transport failures (0 = disable).
+        retry_backoff: Initial backoff in seconds; doubles on each retry.
+    """
+
+    def __init__(
+        self,
+        settings: LocalSettings,
+        *,
+        max_retries: int = _DEFAULT_MAX_RETRIES,
+        retry_backoff: float = _DEFAULT_RETRY_BACKOFF,
+    ) -> None:
         self._settings = settings
         self._base_url = settings.base_url
         self._auth = build_auth(settings)
         self._client: httpx.AsyncClient | None = None
+        self._max_retries = max_retries
+        self._retry_backoff = retry_backoff
+        self._capability_matrix = build_default_matrix()
 
     async def __aenter__(self) -> LocalClient:
         self._client = httpx.AsyncClient(
@@ -86,6 +115,27 @@ class LocalClient(AkuvoxClientBase):
             await self._client.aclose()
             self._client = None
 
+    # ── Capability guardrails ───────────────────────────────────────
+
+    def _check_capability(self, feature: str) -> None:
+        """Check the capability matrix before executing an operation.
+
+        Raises UnsupportedFeatureError for UNSUPPORTED features.
+        Logs a warning for UNVERIFIED features but allows execution.
+        """
+        cap = self._capability_matrix.get(feature, Provider.LOCAL_HTTP)
+        if cap is None:
+            return  # Unknown feature — allow optimistically
+        if cap.level == SupportLevel.UNSUPPORTED:
+            raise UnsupportedFeatureError(feature, Provider.LOCAL_HTTP)
+        if cap.level == SupportLevel.UNVERIFIED:
+            logger.warning(
+                "experimental_feature",
+                feature=feature,
+                notes=cap.notes,
+                msg=f"Feature '{feature}' is UNVERIFIED — may fail or behave unexpectedly",
+            )
+
     # ── Raw HTTP ────────────────────────────────────────────────────
 
     async def _request(
@@ -99,57 +149,110 @@ class LocalClient(AkuvoxClientBase):
     ) -> dict[str, Any]:
         """Make an HTTP request and return parsed JSON.
 
-        Handles error mapping: HTTP errors → our exception hierarchy.
-        Logs request/response at debug level with redacted headers.
+        Handles:
+        - Error mapping: HTTP errors → our exception hierarchy
+        - Retry with exponential backoff for transient transport/5xx failures
+        - Request/response logging with redacted secrets
+        - Response shape validation
         """
         if not self._client:
             raise ConnectionError("Client not initialized — use 'async with' context manager")
 
         log = logger.bind(method=method, path=path, host=self._settings.host)
-        log.debug("request_start", params=params)
+        log.debug("request_start", params=params, has_body=json_body is not None or data is not None)
 
-        try:
-            response = await self._client.request(
-                method,
-                path,
-                params=params,
-                data=data,
-                json=json_body,
+        last_exc: Exception | None = None
+        for attempt in range(1, self._max_retries + 2):  # attempt 1 = initial, rest = retries
+            try:
+                response = await self._client.request(
+                    method,
+                    path,
+                    params=params,
+                    data=data,
+                    json=json_body,
+                )
+            except httpx.ConnectError as exc:
+                last_exc = exc
+                if attempt <= self._max_retries:
+                    wait = self._retry_backoff * (2 ** (attempt - 1))
+                    log.warning("connection_failed_retrying", error=str(exc), attempt=attempt, wait=wait)
+                    await asyncio.sleep(wait)
+                    continue
+                log.error("connection_failed", error=str(exc), attempts=attempt)
+                raise ConnectionError(f"Cannot reach {self._base_url}: {exc}") from exc
+            except httpx.TimeoutException as exc:
+                last_exc = exc
+                if attempt <= self._max_retries:
+                    wait = self._retry_backoff * (2 ** (attempt - 1))
+                    log.warning("timeout_retrying", error=str(exc), attempt=attempt, wait=wait)
+                    await asyncio.sleep(wait)
+                    continue
+                log.error("request_timeout", error=str(exc), attempts=attempt)
+                raise TimeoutError(f"Request to {path} timed out after {attempt} attempt(s)") from exc
+
+            log.debug(
+                "response_received",
+                status=response.status_code,
+                headers=redact_headers(dict(response.headers)),
+                content_length=len(response.content),
             )
-        except httpx.ConnectError as exc:
-            log.error("connection_failed", error=str(exc))
-            raise ConnectionError(f"Cannot reach {self._base_url}: {exc}") from exc
-        except httpx.TimeoutException as exc:
-            log.error("request_timeout", error=str(exc))
-            raise TimeoutError(f"Request to {path} timed out") from exc
 
-        log.debug(
-            "response_received",
-            status=response.status_code,
-            headers=redact_headers(dict(response.headers)),
-        )
+            # Retry on transient server errors
+            if response.status_code in _TRANSIENT_STATUS_CODES and attempt <= self._max_retries:
+                wait = self._retry_backoff * (2 ** (attempt - 1))
+                log.warning(
+                    "transient_error_retrying",
+                    status=response.status_code,
+                    attempt=attempt,
+                    wait=wait,
+                )
+                await asyncio.sleep(wait)
+                continue
 
-        if response.status_code == 401:
-            raise AuthenticationError(
-                f"Authentication failed for {self._base_url} "
-                f"(auth_type={self._settings.auth_type})"
-            )
-        if response.status_code == 403:
-            raise AuthenticationError(f"Access forbidden for {path}")
+            # Non-retryable status codes
+            if response.status_code == 401:
+                raise AuthenticationError(
+                    f"Authentication failed for {self._base_url} "
+                    f"(auth_type={self._settings.auth_type})"
+                )
+            if response.status_code == 403:
+                raise AuthenticationError(f"Access forbidden for {path}")
 
-        if response.status_code >= 400:
-            raise DeviceError(
-                f"Device returned HTTP {response.status_code} for {method} {path}: "
-                f"{response.text[:200]}"
-            )
+            if response.status_code >= 400:
+                raise DeviceError(
+                    f"Device returned HTTP {response.status_code} for {method} {path}: "
+                    f"{response.text[:200]}"
+                )
 
-        try:
-            return response.json()
-        except Exception as exc:
-            log.error("json_parse_failed", body=response.text[:500])
-            raise ParseError(
-                f"Invalid JSON from {path}", raw_data=response.text[:500]
-            ) from exc
+            # Validate response body before JSON parsing
+            body_text = response.text.strip()
+            if not body_text:
+                raise ParseError(f"Empty response body from {method} {path}", raw_data="")
+
+            try:
+                result = response.json()
+            except Exception as exc:
+                log.error("json_parse_failed", body_preview=body_text[:200])
+                raise ParseError(
+                    f"Invalid JSON from {path}", raw_data=body_text[:500]
+                ) from exc
+
+            if not isinstance(result, dict):
+                raise ParseError(
+                    f"Expected JSON object from {path}, got {type(result).__name__}",
+                    raw_data=result,
+                )
+
+            # Check for device-level error codes (retcode != 0)
+            retcode = result.get("retcode")
+            if retcode is not None and retcode != 0:
+                error_msg = result.get("message", result.get("msg", f"retcode={retcode}"))
+                raise DeviceError(f"Device error on {method} {path}: {error_msg}")
+
+            return result
+
+        # Should not reach here, but just in case
+        raise ConnectionError(f"Request to {path} failed after retries") from last_exc
 
     async def _get(self, path: str, **params: Any) -> dict[str, Any]:
         return await self._request("GET", path, params=params or None)
@@ -272,9 +375,13 @@ class LocalClient(AkuvoxClientBase):
     async def reboot(self) -> bool:
         """Attempt to reboot the device.
 
-        TODO: Endpoint path is unverified. Trying common patterns.
+        WARNING: Endpoint path is UNVERIFIED. Tries common patterns.
         This may not work on all models/firmware versions.
+
+        The capability matrix marks this as ``UNVERIFIED`` — a warning
+        is logged but execution is allowed.
         """
+        self._check_capability("reboot")
         logger.warning("reboot_attempt", host=self._settings.host,
                        note="Unverified endpoint — may fail")
         try:
@@ -297,3 +404,56 @@ class LocalClient(AkuvoxClientBase):
     async def raw_post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         """Make a raw POST request — useful for endpoint exploration."""
         return await self._post_json(path, body)
+
+    # ── Paginated fetch helpers ─────────────────────────────────────
+
+    async def _fetch_all_pages(
+        self,
+        path: str,
+        list_key: str,
+        parser: Any,
+        *,
+        max_pages: int = _MAX_PAGES,
+    ) -> list[Any]:
+        """Fetch all pages of a paginated endpoint.
+
+        Stops when a page returns an empty list or ``max_pages`` is reached.
+
+        Args:
+            path: API endpoint path.
+            list_key: JSON key containing the list (e.g. "UserList").
+            parser: Callable that converts ``list[dict]`` → ``list[Model]``.
+            max_pages: Safety ceiling to prevent infinite loops.
+        """
+        all_items: list[Any] = []
+        for page in range(1, max_pages + 1):
+            data = await self._get(path, page=page)
+            raw_list = data.get(list_key, data) if isinstance(data, dict) else data
+            if not isinstance(raw_list, list):
+                raise ParseError(f"Expected list under '{list_key}'", raw_data=data)
+            if not raw_list:
+                break
+            all_items.extend(parser(raw_list))
+            # If this page returned fewer items than previous pages, assume last page.
+            # Also stop if the response indicates no more pages.
+            total = data.get("Total") or data.get("total")
+            if total is not None and len(all_items) >= int(total):
+                break
+        logger.debug("pagination_complete", path=path, total_items=len(all_items))
+        return all_items
+
+    async def list_all_users(self) -> list[UserCode]:
+        """Fetch all users across all pages."""
+        return await self._fetch_all_pages("/api/user/list", "UserList", parse_users)
+
+    async def list_all_schedules(self) -> list[Schedule]:
+        """Fetch all schedules across all pages."""
+        return await self._fetch_all_pages("/api/schedule/list", "ScheduleList", parse_schedules)
+
+    async def list_all_door_logs(self) -> list[DoorEvent]:
+        """Fetch all door log entries across all pages."""
+        return await self._fetch_all_pages("/api/log/door", "DoorLog", parse_door_logs)
+
+    async def list_all_call_logs(self) -> list[CallEvent]:
+        """Fetch all call log entries across all pages."""
+        return await self._fetch_all_pages("/api/log/call", "CallLog", parse_call_logs)
