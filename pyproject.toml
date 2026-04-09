@@ -10,7 +10,7 @@ readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.12"
 authors = [
-    { name = "dannielperez" },
+    { name = "Danniel Perez" },
 ]
 keywords = ["akuvox", "intercom", "access-control", "security"]
 classifiers = [
@@ -21,6 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Topic :: Home Automation",
     "Topic :: Security",
+    "Typing :: Typed",
 ]
 
 dependencies = [
@@ -31,6 +32,13 @@ dependencies = [
     "python-dotenv>=1.0",
     "typer[all]>=0.12",
 ]
+
+[project.urls]
+Homepage = "https://github.com/dannielperez/pyakuvox"
+Repository = "https://github.com/dannielperez/pyakuvox"
+Documentation = "https://github.com/dannielperez/pyakuvox#readme"
+Issues = "https://github.com/dannielperez/pyakuvox/issues"
+Changelog = "https://github.com/dannielperez/pyakuvox/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [
