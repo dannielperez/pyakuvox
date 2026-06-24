@@ -102,11 +102,29 @@ class LocalClient(AkuvoxClientBase):
         self._capability_matrix = build_default_matrix()
 
     async def __aenter__(self) -> LocalClient:
+        verify: Any = self._settings.verify_ssl
+        if getattr(self._settings, "legacy_tls", False) and self._settings.use_ssl:
+            # Old Akuvox firmware negotiates weak DH / legacy ciphers that modern
+            # OpenSSL rejects by default. Drop the security level and disable
+            # cert checks (these are LAN/VPN-reachable devices with self-signed certs).
+            import ssl
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            try:
+                ctx.minimum_version = ssl.TLSVersion.MINIMUM_SUPPORTED
+            except (ValueError, AttributeError):
+                pass
+            try:
+                ctx.set_ciphers("DEFAULT@SECLEVEL=0")
+            except ssl.SSLError:
+                pass
+            verify = ctx
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
             auth=self._auth,
             timeout=httpx.Timeout(self._settings.timeout),
-            verify=self._settings.verify_ssl,
+            verify=verify,
         )
         return self
 
@@ -365,35 +383,38 @@ class LocalClient(AkuvoxClientBase):
     # ── Config ──────────────────────────────────────────────────────
 
     async def get_config(self) -> dict[str, Any]:
+        """Return the full autop config. NOTE: the device wraps the key=value
+        map in an envelope — the actual config is under the ``data`` key
+        (``{"retcode":0,"action":"get","message":"OK","data":{...}}``)."""
         return await self._get("/api/config/get")
 
     async def set_config(self, settings: dict[str, str]) -> None:
-        await self._post_json("/api/config/set", settings)
+        """Write autop config keys.
 
-    # ── Experimental / unverified ───────────────────────────────────
+        The firmware requires the action envelope
+        ``{"target":"config","action":"set","data":{<key>:<value>}}`` — posting
+        the bare settings dict returns ``"unsupport action"`` (verified live on
+        R29/R29C/X916). Keys are e.g. ``Config.Account2.SIP.Server``.
+        """
+        resp = await self._post_json(
+            "/api/config/set",
+            {"target": "config", "action": "set", "data": settings},
+        )
+        if isinstance(resp, dict) and resp.get("retcode") not in (0, None):
+            raise DeviceError(f"config set failed: {resp}")
 
     async def reboot(self) -> bool:
-        """Attempt to reboot the device.
+        """Reboot the device.
 
-        WARNING: Endpoint path is UNVERIFIED. Tries common patterns.
-        This may not work on all models/firmware versions.
-
-        The capability matrix marks this as ``UNVERIFIED`` — a warning
-        is logged but execution is allowed.
+        Verified live on R29/R29C/X916:
+        ``POST /api/system/reboot {"target":"system","action":"reboot"}`` → retcode 0.
         """
         self._check_capability("reboot")
-        logger.warning("reboot_attempt", host=self._settings.host,
-                       note="Unverified endpoint — may fail")
-        try:
-            await self._post("/api/system/reboot")
-            return True
-        except DeviceError:
-            # Try alternative path
-            try:
-                await self._post_json("/api/system/reboot", {"action": "reboot"})
-                return True
-            except Exception:
-                return False
+        logger.warning("reboot_attempt", host=self._settings.host)
+        resp = await self._post_json(
+            "/api/system/reboot", {"target": "system", "action": "reboot"}
+        )
+        return not (isinstance(resp, dict) and resp.get("retcode") not in (0, None))
 
     # ── Raw exploration helpers ─────────────────────────────────────
 
