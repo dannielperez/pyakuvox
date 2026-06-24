@@ -57,6 +57,7 @@ class LocalSettings(BaseSettings):
     auth_type: LocalAuthType = LocalAuthType.BASIC
     use_ssl: bool = False
     verify_ssl: bool = False
+    legacy_tls: bool = False  # allow weak DH / legacy ciphers (old Akuvox firmware)
     timeout: int = 10
 
     @property
