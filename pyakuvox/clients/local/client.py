@@ -49,6 +49,7 @@ from pyakuvox.clients.local.parsers import (
 )
 from pyakuvox.config import LocalSettings
 from pyakuvox.exceptions import (
+    ApiAccessForbiddenError,
     AuthenticationError,
     ConnectionError,
     DeviceError,
@@ -234,7 +235,11 @@ class LocalClient(AkuvoxClientBase):
                     f"(auth_type={self._settings.auth_type})"
                 )
             if response.status_code == 403:
-                raise AuthenticationError(f"Access forbidden for {path}")
+                # 403 on Akuvox is almost never a bad password — it's the API in
+                # WhiteList/None auth mode refusing the path (wrong dialect/mode).
+                # ApiAccessForbiddenError subclasses AuthenticationError so old
+                # handlers still catch it, but the message is actionable.
+                raise ApiAccessForbiddenError(path, host=self._settings.host)
 
             if response.status_code >= 400:
                 raise DeviceError(

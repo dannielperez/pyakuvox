@@ -31,6 +31,48 @@ class AuthenticationError(AkuvoxError):
     """Credentials were rejected or session is invalid."""
 
 
+class ApiAccessForbiddenError(AuthenticationError):
+    """The device returned HTTP 403 — the HTTP API is reachable but is
+    refusing the request for a reason that is NOT a bad password.
+
+    On Akuvox firmware a 403 almost always means the API auth mode is
+    ``WhiteList`` (mode 2) with an empty/мismatched allow-list, or ``None``
+    mode rejecting the path — i.e. the wrong *dialect/mode*, not wrong creds.
+    The fix is to flip the API to Digest (mode 4) via the device web UI, not
+    to try other passwords. Subclasses AuthenticationError so existing
+    ``except AuthenticationError`` handlers (and ``"forbidden" in str(e)``
+    checks) keep working.
+    """
+
+    def __init__(self, path: str, host: str = "") -> None:
+        self.path = path
+        self.host = host
+        super().__init__(
+            f"Access forbidden for {path}"
+            f"{f' on {host}' if host else ''} (HTTP 403) — the API is likely in "
+            f"WhiteList/None auth mode, not a credential failure; flip it to Digest."
+        )
+
+
+class UnsupportedDialectError(AkuvoxError):
+    """The device speaks an API dialect this client cannot drive headlessly.
+
+    SPA firmware (``/api/web/*``) and legacy E18C (``/web/*``) hash the login
+    password in browser JavaScript, so writes currently require the
+    Playwright-driven scripts. Identification and model/firmware read still
+    work without login — see ``pyakuvox.identify``.
+    """
+
+    def __init__(self, dialect: str, host: str = "", hint: str = "") -> None:
+        self.dialect = dialect
+        self.host = host
+        detail = f" — {hint}" if hint else ""
+        super().__init__(
+            f"Device {host or ''} speaks the '{dialect}' dialect which is not "
+            f"drivable headlessly by LocalClient{detail}"
+        )
+
+
 class CloudAuthenticationError(AuthenticationError):
     """Cloud-specific auth failure (token expired, SMS validation, etc.)."""
 
