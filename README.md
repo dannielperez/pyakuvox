@@ -6,6 +6,7 @@ Reverse-engineered from real hardware (X916S, R29C) — no official Akuvox SDK o
 
 ## Features
 
+- **Bridge engine** — `identify()` any device's API dialect (and model/firmware) **without logging in**, then `AkuvoxDevice.connect()` for one firmware-agnostic high-level API
 - **Local HTTP API client** — async, production-grade with retry/backoff, response validation, and capability checks
 - **Operator CLI** — human-friendly tables by default, `--json` for automation
 - **Web UI configuration** — enable/configure HTTP API access remotely

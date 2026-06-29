@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pyakuvox"
-version = "0.1.0"
+version = "0.2.0"
 description = "Proof-of-concept Python library for Akuvox intercom integration (local + cloud research)"
 readme = "README.md"
 license = { text = "MIT" }

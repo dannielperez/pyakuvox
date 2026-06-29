@@ -68,6 +68,7 @@ class DiscoveredDevice:
     firmware_version: str = ""
     hardware_version: str = ""
     authenticated: bool = False
+    dialect: str = ""  # see pyakuvox.identify.ApiDialect; "" = not classified
 
     @property
     def display_name(self) -> str:
@@ -165,11 +166,11 @@ async def _http_fingerprint(
     server = resp.headers.get("server", "")
     www_auth = resp.headers.get("www-authenticate", "")
 
-    # Primary fingerprint: realm="HTTP API" in WWW-Authenticate
+    # Primary fingerprint: realm="HTTP API" in WWW-Authenticate (old digest API).
     if resp.status_code == 401 and _AKUVOX_REALM_PATTERN.search(www_auth):
-        return DiscoveredDevice(ip=ip, port=port, server=server)
+        return DiscoveredDevice(ip=ip, port=port, server=server, dialect="digest_api")
 
-    # Secondary: if auth is disabled (mode 0), the API returns JSON directly
+    # Secondary: if auth is disabled (mode 0), the API returns JSON directly.
     if resp.status_code == 200:
         data = _parse_api_json(resp.text)
         if data and data.get("retcode") == 0 and "data" in data:
@@ -183,7 +184,17 @@ async def _http_fingerprint(
                 firmware_version=status.get("FirmwareVersion", ""),
                 hardware_version=status.get("HardwareVersion", ""),
                 authenticated=False,
+                dialect="digest_api",
             )
+
+    # SPA firmware (S5xx/R29C) redirects the digest path; legacy E18C and
+    # WhiteList-blocked digest panels answer 403. Previously these were dropped
+    # as "not Akuvox" — keep them, tagged, so a follow-up identify() probe (which
+    # reads model/fw unauthenticated) can finish the job. See pyakuvox.identify.
+    if resp.status_code in (301, 302, 307, 308):
+        return DiscoveredDevice(ip=ip, port=port, server=server, dialect="web_api")
+    if resp.status_code == 403:
+        return DiscoveredDevice(ip=ip, port=port, server=server, dialect="unknown")
 
     return None
 
