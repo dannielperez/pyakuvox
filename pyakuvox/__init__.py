@@ -33,11 +33,15 @@ from pyakuvox.network import (
 
 try:
     from pyakuvox.clients.local.client import LocalClient
+    from pyakuvox.clients.local.flip import FlipResult, enable_api_digest, verify_digest
     from pyakuvox.config import LocalAuthType, LocalSettings
     from pyakuvox.device import AkuvoxDevice
     from pyakuvox.models.device import DeviceInfo, DeviceStatus, RelayState
 except ModuleNotFoundError:  # pragma: no cover - supports lightweight helper imports
     LocalClient = None  # type: ignore[assignment]
+    FlipResult = None  # type: ignore[assignment]
+    enable_api_digest = None  # type: ignore[assignment]
+    verify_digest = None  # type: ignore[assignment]
     LocalAuthType = None  # type: ignore[assignment]
     LocalSettings = None  # type: ignore[assignment]
     AkuvoxDevice = None  # type: ignore[assignment]
@@ -51,13 +55,14 @@ __all__ = [
     "ApiAccessForbiddenError",
     "ApiDialect",
     "AuthenticationError",
-    "ConnectionError",
     "ConfigKeyMap",
+    "ConnectionError",
     "CustomPostProfile",
     "DeviceError",
     "DeviceIdentity",
     "DeviceInfo",
     "DeviceStatus",
+    "FlipResult",
     "LocalAuthType",
     "LocalClient",
     "LocalSettings",
@@ -69,10 +74,12 @@ __all__ = [
     "UnsupportedFeatureError",
     "build_config_set_payload",
     "dialect_for_model",
+    "enable_api_digest",
     "identify",
     "identify_many",
     "map_ip",
     "plan_static_network",
     "render_body",
     "render_url",
+    "verify_digest",
 ]

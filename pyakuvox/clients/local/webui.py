@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from enum import IntEnum
+from enum import IntEnum, StrEnum
 from typing import Any
 
 import httpx
@@ -34,6 +34,7 @@ import structlog
 
 from pyakuvox.clients.local.encoding import (
     encode_config_password,
+    encode_config_password_legacy,
     encode_login_password,
     post_encode,
 )
@@ -45,11 +46,23 @@ logger = structlog.get_logger(__name__)
 _HTTP_API_CONFIG_PAGE = "id=130&id=16"
 
 
+class ConfigPasswordEncoding(StrEnum):
+    """How the HTTP-API config password must be encoded for this FCGI firmware.
+
+    The ``/fcgi/do`` web UI is shared by X916 and R29/R29C, but they disagree on
+    the password wire-encoding (see ``encoding.py``). Pick by model/firmware, or
+    let :func:`pyakuvox.clients.local.flip.enable_api_digest` try and verify both.
+    """
+
+    X916 = "x916"   # post_encode(base64(pw))
+    R29C = "r29c"   # post_encode(raw)  — also plain R29
+
+
 class FirmwareAuthMode(IntEnum):
     """HTTP API auth modes as stored in the device firmware.
 
     These are the raw values for the hcAuthMode config field.
-    Discovered by brute-force testing modes 0–5 on real hardware.
+    Discovered by brute-force testing modes 0-5 on real hardware.
     """
 
     NONE = 0
@@ -97,12 +110,14 @@ class WebUIClient:
         use_ssl: bool = False,
         verify_ssl: bool = False,
         timeout: int = 15,
+        password_encoding: ConfigPasswordEncoding = ConfigPasswordEncoding.X916,
     ) -> None:
         self._host = host
         self._port = port
         self._scheme = "https" if use_ssl else "http"
         self._verify_ssl = verify_ssl
         self._timeout = timeout
+        self._password_encoding = password_encoding
         self._client: httpx.AsyncClient | None = None
         self._session_id: str | None = None
 
@@ -282,7 +297,8 @@ class WebUIClient:
         Args:
             auth_mode: Which auth method the HTTP API should require.
             username: API username (used with Basic/Digest auth).
-            password: API password (will be Base64+PostEncoded before submission).
+            password: API password — encoded per ``password_encoding`` (X916:
+                Base64+PostEncode; R29C: PostEncode of the raw password).
             whitelist_ips: Up to 5 IP addresses for whitelist mode.
             enabled: Whether the HTTP API is enabled at all.
         """
@@ -302,7 +318,12 @@ class WebUIClient:
             parts.append(f"cUserName={post_encode(username)}")
 
         if password is not None:
-            parts.append(f"cPassword={encode_config_password(password)}")
+            encoder = (
+                encode_config_password_legacy
+                if self._password_encoding is ConfigPasswordEncoding.R29C
+                else encode_config_password
+            )
+            parts.append(f"cPassword={encoder(password)}")
 
         if whitelist_ips is not None:
             for i in range(5):
