@@ -155,6 +155,8 @@ class AkuvoxDevice:
                 "server2": f"{base}.SIP.Server2",
                 "port": f"{base}.SIP.Port",
                 "enable": f"{base}.GENERAL.Enable",
+                "reg_timeout": f"{base}.REG.Timeout",
+                "reg_timeout2": f"{base}.REG.Timeout2",
             }
         if "Config.Account.SIP.Server" in cfg:  # E18C single-account
             return {
@@ -162,6 +164,8 @@ class AkuvoxDevice:
                 "server2": "Config.Account.OUTPROXY.Server",  # E18C fallback = outbound proxy
                 "port": "Config.Account.SIP.Port",
                 "enable": "Config.Account.GENERAL.Enable",
+                "reg_timeout": "Config.Account.REG.Timeout",
+                "reg_timeout2": "Config.Account.REG.Timeout2",
             }
         raise DeviceError(
             f"No SIP keys for account {account} in config "
@@ -172,9 +176,9 @@ class AkuvoxDevice:
         """Read a SIP account's routing in a uniform, address-agnostic shape.
 
         Returns ``{'server','server2','port','enable','enabled','has_fallback',
-        'keys'}``. ``has_fallback`` is True when a secondary server is set.
-        The SDK makes no judgement about which address is "good" — the caller
-        owns that policy.
+        'reg_timeout','reg_timeout2','keys'}``. ``has_fallback`` is True when a
+        secondary server is set. The SDK makes no judgement about which address
+        is "good" — the caller owns that policy.
         """
         cfg = await self.get_config()
         keys = self._resolve_account_keys(cfg, account)
@@ -187,6 +191,8 @@ class AkuvoxDevice:
             "enable": cfg.get(keys["enable"]),
             "enabled": str(cfg.get(keys["enable"])) in ("1", "true", "True"),
             "has_fallback": bool(server2),
+            "reg_timeout": cfg.get(keys["reg_timeout"]),
+            "reg_timeout2": cfg.get(keys["reg_timeout2"]),
             "keys": keys,
         }
 
@@ -244,3 +250,145 @@ class AkuvoxDevice:
         return {"before": before, "plan": plan, "changed": True, "applied": True,
                 "verdict": "set-verified" if ok else "set-did-not-stick",
                 "after": {"server": after["server"], "server2": after["server2"]}}
+
+    async def set_reg_period(
+        self,
+        account: int,
+        seconds: int = 30,
+        *,
+        apply: bool = False,
+    ) -> dict[str, Any]:
+        """Set an account's SIP registration period (``REG.Timeout``/``.Timeout2``).
+
+        The device only re-registers — and therefore fails over to the
+        secondary server — when the registration period expires. The 1800s
+        default was the root cause of slow SIP failover; 30s is the
+        field-validated value. Writes BOTH the primary and secondary timeout
+        keys to the same value.
+
+        Default is a dry-run plan. ``apply=True`` writes (multi-account
+        firmware only — same E18C refusal as ``set_sip_server``).
+
+        Returns ``{'before','plan','changed','applied','verdict'}``.
+        """
+        acct = await self.account_sip(account)
+        keys = acct["keys"]
+        before = {"reg_timeout": acct["reg_timeout"], "reg_timeout2": acct["reg_timeout2"]}
+        if not acct["enabled"]:
+            return {"before": before, "plan": {}, "changed": False, "applied": False,
+                    "verdict": "account-disabled"}
+
+        want = str(seconds)
+        diff: dict[str, str] = {}
+        plan: dict[str, str] = {}
+        for field in ("reg_timeout", "reg_timeout2"):
+            have = "" if acct[field] is None else str(acct[field])
+            if have != want:
+                diff[keys[field]] = want
+                plan[field] = f"{have!r} -> {want!r}"
+
+        if not diff:
+            return {"before": before, "plan": {}, "changed": False, "applied": False,
+                    "verdict": "already-set"}
+        if not apply:
+            return {"before": before, "plan": plan, "changed": False, "applied": False,
+                    "verdict": "would-change"}
+        if keys["server"] == "Config.Account.SIP.Server":
+            raise UnsupportedDialectError(
+                "legacy_web", host=self.identity.host,
+                hint="E18C single-account writes need the keyed /web edit "
+                "envelope (action=edit, '<value>&<cfgId>&<keyNum>'), not flat set",
+            )
+        await self.set_config(diff)
+        after = await self.account_sip(account)
+        ok = str(after["reg_timeout"]) == want and str(after["reg_timeout2"]) == want
+        return {"before": before, "plan": plan, "changed": True, "applied": True,
+                "verdict": "set-verified" if ok else "set-did-not-stick",
+                "after": {"reg_timeout": after["reg_timeout"],
+                          "reg_timeout2": after["reg_timeout2"]}}
+
+    async def set_sip_failover(
+        self,
+        account: int,
+        primary: str,
+        failover: str,
+        *,
+        reg_period_sec: int = 30,
+        apply: bool = False,
+        reboot: bool = True,
+    ) -> dict[str, Any]:
+        """Apply the field-validated resilient-calling recipe in one shot.
+
+        Sets ``SIP.Server`` = ``primary`` (e.g. the internal/VPN PBX address),
+        ``SIP.Server2`` = ``failover`` (e.g. the public PBX address) and the
+        registration period (``REG.Timeout``/``.Timeout2``) to
+        ``reg_period_sec`` — ONE config write, one verify read. After an
+        applied change it reboots by default: these devices can lose unsaved
+        config on power loss, so persisting immediately is part of the recipe.
+        Pass ``failover=""`` to clear the secondary. The SDK holds no
+        site-specific addresses — both servers are supplied by the caller.
+
+        Default is a dry-run plan. ``apply=True`` writes (multi-account
+        firmware only — same E18C refusal as ``set_sip_server``).
+
+        Returns ``{'before','plan','changed','applied','rebooted','verdict'}``.
+        """
+        acct = await self.account_sip(account)
+        keys = acct["keys"]
+        before = {"server": acct["server"], "server2": acct["server2"],
+                  "reg_timeout": acct["reg_timeout"], "reg_timeout2": acct["reg_timeout2"]}
+        if not acct["enabled"]:
+            return {"before": before, "plan": {}, "changed": False, "applied": False,
+                    "rebooted": False, "verdict": "account-disabled"}
+
+        want_period = str(reg_period_sec)
+        targets = {
+            "server": (keys["server"], acct["server"] or "", primary),
+            "server2": (keys["server2"], acct["server2"] or "", failover),
+            "reg_timeout": (
+                keys["reg_timeout"],
+                "" if acct["reg_timeout"] is None else str(acct["reg_timeout"]),
+                want_period,
+            ),
+            "reg_timeout2": (
+                keys["reg_timeout2"],
+                "" if acct["reg_timeout2"] is None else str(acct["reg_timeout2"]),
+                want_period,
+            ),
+        }
+        diff: dict[str, str] = {}
+        plan: dict[str, str] = {}
+        for name, (key, have, want) in targets.items():
+            if have != want:
+                diff[key] = want
+                plan[name] = f"{have!r} -> {want!r}"
+
+        if not diff:
+            return {"before": before, "plan": {}, "changed": False, "applied": False,
+                    "rebooted": False, "verdict": "already-set"}
+        if not apply:
+            return {"before": before, "plan": plan, "changed": False, "applied": False,
+                    "rebooted": False, "verdict": "would-change"}
+        if keys["server"] == "Config.Account.SIP.Server":
+            raise UnsupportedDialectError(
+                "legacy_web", host=self.identity.host,
+                hint="E18C single-account writes need the keyed /web edit "
+                "envelope (action=edit, '<value>&<cfgId>&<keyNum>'), not flat set",
+            )
+        await self.set_config(diff)
+        after = await self.account_sip(account)
+        ok = (
+            after["server"] == primary
+            and (after["server2"] or "") == failover
+            and str(after["reg_timeout"]) == want_period
+            and str(after["reg_timeout2"]) == want_period
+        )
+        rebooted = False
+        if reboot:
+            rebooted = bool(await self.reboot())
+        return {"before": before, "plan": plan, "changed": True, "applied": True,
+                "rebooted": rebooted,
+                "verdict": "set-verified" if ok else "set-did-not-stick",
+                "after": {"server": after["server"], "server2": after["server2"],
+                          "reg_timeout": after["reg_timeout"],
+                          "reg_timeout2": after["reg_timeout2"]}}
