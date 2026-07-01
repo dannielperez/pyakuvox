@@ -51,10 +51,38 @@ def encode_login_password(random_string: str, password: str) -> str:
 
 
 def encode_config_password(password: str) -> str:
-    """Encode a password for HTTP API config page submission.
+    """Encode an HTTP API config password for the **X916 FCGI** web UI.
 
     Flow: Base64(password) → PostEncode
-    Used when setting the hcPassword field on the config page.
+    Used when setting the hcPassword field on the X916 ``/fcgi/do`` config page.
     """
     b64 = base64.b64encode(password.encode("utf-8")).decode("ascii")
     return post_encode(b64)
+
+
+def encode_config_password_legacy(password: str) -> str:
+    """Encode an HTTP API config password for the **R29/R29C FCGI** web UI.
+
+    Flow: PostEncode(RAW password) — **NOT** base64.
+
+    The R29C firmware stores the field as received (and digest then hashes the
+    raw password), so the wire value must be the raw password, PostEncoded only
+    for safe form transport. Sending the X916 ``encode_config_password``
+    (base64) here makes digest auth return 401 (the firmware would need to, but
+    does not, base64-decode it). Verified live on R29C panels (2026-06).
+    """
+    return post_encode(password)
+
+
+def encode_config_password_webapi(password: str) -> str:
+    """Encode an HTTP API config password for the **S5xx SPA** ``/api/web``.
+
+    Flow: Base64(password) — plain, no PostEncode.
+
+    The Vue SPA's ``St()`` helper is ``base64(utf8(pw))`` over the standard
+    alphabet; the JSON transport needs no backtick escaping. The firmware
+    base64-decodes it to recover the raw password, so digest auth then works
+    with the raw password. Writing the RAW password instead makes the firmware
+    base64-decode it into garbage → digest 401. Verified live on S535 (2026-06).
+    """
+    return base64.b64encode(password.encode("utf-8")).decode("ascii")
