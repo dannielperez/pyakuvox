@@ -1,6 +1,6 @@
 """Unauthenticated Akuvox device identification.
 
-The single most useful primitive for a fleet: given an IP, work out *which
+The single most useful primitive when managing many devices: given an IP, work out *which
 API dialect the firmware speaks* and (where the firmware leaks it) its model
 and firmware version — **without logging in**. Every higher-level operation
 (connect, configure, audit) should start here so it talks to the device the
@@ -8,8 +8,7 @@ right way instead of guessing.
 
 Why this matters: Akuvox firmware ships at least three mutually-incompatible
 local HTTP API dialects, and the *same* request (``GET /api/system/info``)
-returns a different status code on each. This was validated live across the
-fleet (2026-06):
+returns a different status code on each. This was validated against real hardware:
 
     GET /api/system/info  (no auth)        ->  dialect
     ─────────────────────────────────────────────────────────────────

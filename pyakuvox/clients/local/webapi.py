@@ -6,7 +6,7 @@ Like :class:`~pyakuvox.clients.local.webui.WebUIClient`, the one thing we need i
 for is configuring the HTTP API itself (auth mode + credentials) so the headless
 :class:`~pyakuvox.clients.local.client.LocalClient` digest ``/api`` can take over.
 
-Protocol (reverse-engineered from the S535 SPA bundle, 2026-06):
+Protocol (reverse-engineered from the S535 SPA bundle):
 
   1. POST /api/web/login/set    {target:login,action:set}              -> data.encrypt (nonce)
   2. POST /api/web/login/login  {..,data:{userName,password}}          -> data.token

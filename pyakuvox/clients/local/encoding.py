@@ -69,7 +69,7 @@ def encode_config_password_legacy(password: str) -> str:
     raw password), so the wire value must be the raw password, PostEncoded only
     for safe form transport. Sending the X916 ``encode_config_password``
     (base64) here makes digest auth return 401 (the firmware would need to, but
-    does not, base64-decode it). Verified live on R29C panels (2026-06).
+    does not, base64-decode it). Verified on R29C panels.
     """
     return post_encode(password)
 
@@ -83,6 +83,6 @@ def encode_config_password_webapi(password: str) -> str:
     alphabet; the JSON transport needs no backtick escaping. The firmware
     base64-decodes it to recover the raw password, so digest auth then works
     with the raw password. Writing the RAW password instead makes the firmware
-    base64-decode it into garbage → digest 401. Verified live on S535 (2026-06).
+    base64-decode it into garbage → digest 401. Verified on S535.
     """
     return base64.b64encode(password.encode("utf-8")).decode("ascii")
