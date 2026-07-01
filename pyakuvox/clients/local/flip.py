@@ -1,23 +1,26 @@
-"""Universal "flip the HTTP API to Digest" orchestrator.
+"""Universal "set the HTTP-API auth mode" orchestrator.
 
 Akuvox ships several mutually-incompatible web UIs (FCGI ``/fcgi/do`` for
 X916/R29C, the SPA ``/api/web/*`` for S5xx), and each encodes the API password
 differently. Locked panels (HTTP-API auth = WhiteList with an empty allowlist)
 answer ``403`` to the digest ``/api`` that :class:`LocalClient` needs.
 
-:func:`enable_api_digest` is the one entry point that makes a panel
-headless-manageable regardless of model/firmware:
+:func:`enable_api` is the one entry point that reconfigures a panel's HTTP-API
+auth regardless of model/firmware. The ``auth_mode`` flag makes it generic — the
+common case is Digest (so :class:`LocalClient` can drive the panel headlessly),
+but the same call sets WhiteList, None, or Basic+Digest. It:
 
-  1. short-circuit if digest already works,
+  1. short-circuits if the target is already in effect,
   2. :func:`~pyakuvox.identify.identify` the dialect,
-  3. drive the right web client (:class:`WebUIClient` / :class:`WebApiClient`),
-  4. **verify** the digest ``/api`` actually answers ``200`` afterwards —
-     retrying across candidate password encodings, since the FCGI UI is shared
-     by X916 (``base64``) and R29C (``raw``) firmware that need different ones.
+  3. drives the right web client (:class:`WebUIClient` / :class:`WebApiClient`),
+  4. **verifies** the result — for Digest modes by proving the digest ``/api``
+     answers ``200`` (retrying across candidate password encodings, since the
+     FCGI UI is shared by X916 ``base64`` and R29C ``raw`` firmware); for other
+     modes by reading the auth mode back.
 
-It never trusts the write alone: the verify step is what makes it "works no
-matter the model." Designed to be gentle — one login per attempt, the SPA
-client backs off on throttle.
+It never trusts the write alone. :func:`enable_api_digest` is the thin
+convenience wrapper for the Digest case. Gentle by design — one login per
+attempt, the SPA client backs off on throttle.
 """
 
 from __future__ import annotations
@@ -33,20 +36,25 @@ from pyakuvox.clients.local.webapi import WebApiClient
 from pyakuvox.clients.local.webui import (
     ConfigPasswordEncoding,
     FirmwareAuthMode,
+    HttpApiConfig,
     WebUIClient,
 )
 from pyakuvox.identify import ApiDialect, dialect_for_model, identify
 
 logger = structlog.get_logger(__name__)
 
+# Auth modes whose success can be proven end-to-end by a client digest call.
+_DIGEST_MODES = (FirmwareAuthMode.DIGEST, FirmwareAuthMode.BASIC_DIGEST)
+
 
 class FlipResult(BaseModel):
-    """Outcome of an :func:`enable_api_digest` attempt."""
+    """Outcome of an :func:`enable_api` attempt."""
 
     host: str
     ok: bool = False
-    # already-digest | fixed-digest | flip-not-verified | unsupported-dialect | unreachable
+    # already-set | applied | not-verified | unsupported-dialect | unreachable
     verdict: str = ""
+    auth_mode: FirmwareAuthMode | None = None
     dialect: ApiDialect = ApiDialect.UNKNOWN
     encoding_used: str = ""        # which password encoding finally verified
     error: str = ""
@@ -87,9 +95,20 @@ async def verify_digest(
     return False
 
 
+async def _verify(
+    host: str, api_user: str, api_pass: str,
+    auth_mode: FirmwareAuthMode, cfg: HttpApiConfig | None,
+) -> bool:
+    """Did the flip take? Digest modes are proven end-to-end; other modes are
+    confirmed by the auth mode read back from the device."""
+    if auth_mode in _DIGEST_MODES:
+        return await verify_digest(host, api_user, api_pass)
+    return cfg is not None and cfg.auth_mode == auth_mode
+
+
 async def _flip_fcgi(
     host: str, web_user: str, web_pass: str, api_user: str, api_pass: str,
-    model: str, timeout: int,
+    auth_mode: FirmwareAuthMode, model: str, timeout: int,
 ) -> str:
     """Flip a ``/fcgi/do`` panel; try each encoding, verifying between. Returns
     the encoding that verified, or "" if none did."""
@@ -101,47 +120,49 @@ async def _flip_fcgi(
         try:
             async with WebUIClient(host, timeout=timeout, password_encoding=enc) as ui:
                 await ui.login(web_user, web_pass)
-                await ui.enable_api_access(api_user, api_pass, FirmwareAuthMode.DIGEST)
+                cfg = await ui.enable_api_access(api_user, api_pass, auth_mode)
         except Exception as exc:
             logger.debug("fcgi_flip_attempt_failed", host=host, encoding=enc.value, error=str(exc))
             continue
-        if await verify_digest(host, api_user, api_pass):
+        if await _verify(host, api_user, api_pass, auth_mode, cfg):
             return enc.value
     return ""
 
 
 async def _flip_webapi(
     host: str, web_user: str, web_pass: str, api_user: str, api_pass: str,
-    model: str, timeout: int,
+    auth_mode: FirmwareAuthMode, model: str, timeout: int,
 ) -> str:
     """Flip an ``/api/web/*`` SPA panel. Returns "web_api" if it verified."""
     async with WebApiClient(host, timeout=timeout) as web:
         await web.login(web_user, web_pass)
-        await web.enable_api_access(api_user, api_pass, FirmwareAuthMode.DIGEST)
-    return "web_api" if await verify_digest(host, api_user, api_pass) else ""
+        cfg = await web.enable_api_access(api_user, api_pass, auth_mode)
+    return "web_api" if await _verify(host, api_user, api_pass, auth_mode, cfg) else ""
 
 
-async def enable_api_digest(
+async def enable_api(
     host: str,
     *,
     web_user: str,
     web_pass: str,
     api_user: str,
     api_pass: str,
+    auth_mode: FirmwareAuthMode = FirmwareAuthMode.DIGEST,
     model: str | None = None,
     timeout: int = 15,
 ) -> FlipResult:
-    """Make a panel's HTTP API speak Digest with the given API creds.
+    """Set a panel's HTTP-API auth mode with the given API creds, any dialect.
 
-    Idempotent: returns ``already-digest`` if the creds already work. Dispatches
-    on the identified dialect and verifies the result. ``web_user``/``web_pass``
-    are the web-UI login; ``api_user``/``api_pass`` are installed as the API
-    creds. ``model`` (optional) biases the FCGI encoding order.
+    Idempotent for Digest modes: returns ``already-set`` if the creds already
+    work. Dispatches on the identified dialect and verifies the result.
+    ``web_user``/``web_pass`` are the web-UI login; ``api_user``/``api_pass`` are
+    installed as the API creds. ``auth_mode`` selects the target mode (default
+    Digest). ``model`` (optional) biases the FCGI encoding order.
     """
-    res = FlipResult(host=host)
+    res = FlipResult(host=host, auth_mode=auth_mode)
 
-    if await verify_digest(host, api_user, api_pass):
-        res.ok, res.verdict, res.dialect = True, "already-digest", ApiDialect.DIGEST_API
+    if auth_mode in _DIGEST_MODES and await verify_digest(host, api_user, api_pass):
+        res.ok, res.verdict, res.dialect = True, "already-set", ApiDialect.DIGEST_API
         return res
 
     ident = await identify(host)
@@ -165,15 +186,36 @@ async def enable_api_digest(
     last_err = ""
     for path in paths:
         try:
-            used = await path(host, web_user, web_pass, api_user, api_pass, model or "", timeout)
+            used = await path(host, web_user, web_pass, api_user, api_pass,
+                              auth_mode, model or "", timeout)
         except Exception as exc:
             last_err = f"{type(exc).__name__}: {exc}"
             logger.debug("flip_path_error", host=host, path=path.__name__, error=last_err)
             continue
         if used:
-            res.ok, res.verdict, res.encoding_used = True, "fixed-digest", used
+            res.ok, res.verdict, res.encoding_used = True, "applied", used
             return res
 
-    res.verdict = "flip-not-verified"
+    res.verdict = "not-verified"
     res.error = last_err
     return res
+
+
+async def enable_api_digest(
+    host: str,
+    *,
+    web_user: str,
+    web_pass: str,
+    api_user: str,
+    api_pass: str,
+    model: str | None = None,
+    timeout: int = 15,
+) -> FlipResult:
+    """Convenience wrapper for the common case: :func:`enable_api` with
+    ``auth_mode=Digest`` — make a panel headless-manageable by ``LocalClient``.
+    """
+    return await enable_api(
+        host, web_user=web_user, web_pass=web_pass,
+        api_user=api_user, api_pass=api_pass,
+        auth_mode=FirmwareAuthMode.DIGEST, model=model, timeout=timeout,
+    )
