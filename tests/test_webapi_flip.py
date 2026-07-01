@@ -18,7 +18,7 @@ from pyakuvox.clients.local.encoding import (
     encode_config_password_webapi,
     post_encode,
 )
-from pyakuvox.clients.local.flip import FlipResult, enable_api_digest
+from pyakuvox.clients.local.flip import FlipResult, enable_api, enable_api_digest
 from pyakuvox.clients.local.webapi import WebApiClient
 from pyakuvox.clients.local.webui import FirmwareAuthMode
 from pyakuvox.identify import ApiDialect, DeviceIdentity
@@ -120,18 +120,19 @@ async def test_webapi_enable_api_access_sends_base64_password():
     assert cfg.auth_mode is FirmwareAuthMode.DIGEST
 
 
-# ── Orchestrator dispatch ────────────────────────────────────────────────
+# ── Orchestrator dispatch (generic enable_api + Digest wrapper) ──────────
 
 @pytest.mark.asyncio
-async def test_enable_api_digest_short_circuits_when_already_digest():
+async def test_enable_api_digest_short_circuits_when_already_set():
     with patch.object(flip_mod, "verify_digest", AsyncMock(return_value=True)):
         res = await enable_api_digest("1.2.3.4", web_user="a", web_pass="b",
                                       api_user="admin", api_pass="pw")
-    assert res.ok and res.verdict == "already-digest"
+    assert res.ok and res.verdict == "already-set"
+    assert res.auth_mode is FirmwareAuthMode.DIGEST  # wrapper pins Digest
 
 
 @pytest.mark.asyncio
-async def test_enable_api_digest_dispatches_webapi_for_spa():
+async def test_enable_api_dispatches_webapi_for_spa():
     ident = DeviceIdentity(host="1.2.3.4", reachable=True, dialect=ApiDialect.WEB_API, model="S535")
     # verify_digest: False first (not yet), True after the SPA flip
     verify = AsyncMock(side_effect=[False, True])
@@ -139,44 +140,64 @@ async def test_enable_api_digest_dispatches_webapi_for_spa():
          patch.object(flip_mod, "identify", AsyncMock(return_value=ident)), \
          patch.object(flip_mod, "_flip_webapi", AsyncMock(return_value="web_api")) as spa, \
          patch.object(flip_mod, "_flip_fcgi", AsyncMock(return_value="")) as fcgi:
-        res = await enable_api_digest("1.2.3.4", web_user="a", web_pass="b",
-                                      api_user="admin", api_pass="pw")
-    assert res.ok and res.verdict == "fixed-digest" and res.encoding_used == "web_api"
+        res = await enable_api("1.2.3.4", web_user="a", web_pass="b",
+                               api_user="admin", api_pass="pw")
+    assert res.ok and res.verdict == "applied" and res.encoding_used == "web_api"
     spa.assert_awaited_once()
     fcgi.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_enable_api_digest_unsupported_dialect():
+async def test_enable_api_non_digest_mode_skips_digest_shortcircuit():
+    """A non-Digest target must NOT short-circuit on verify_digest — it should
+    identify + apply and confirm via the mode read back (mocked _flip)."""
+    ident = DeviceIdentity(host="1.2.3.4", reachable=True,
+                           dialect=ApiDialect.FCGI_WEB, model="X916")
+    verify = AsyncMock(return_value=True)  # would short-circuit IF consulted
+    with patch.object(flip_mod, "verify_digest", verify), \
+         patch.object(flip_mod, "identify", AsyncMock(return_value=ident)) as ident_mock, \
+         patch.object(flip_mod, "_flip_fcgi", AsyncMock(return_value="x916")) as fcgi:
+        res = await enable_api("1.2.3.4", web_user="a", web_pass="b",
+                               api_user="admin", api_pass="pw",
+                               auth_mode=FirmwareAuthMode.WHITELIST)
+    assert res.ok and res.verdict == "applied"
+    assert res.auth_mode is FirmwareAuthMode.WHITELIST
+    ident_mock.assert_awaited_once()   # did NOT short-circuit
+    verify.assert_not_awaited()        # digest check irrelevant for WhiteList
+    fcgi.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_enable_api_unsupported_dialect():
     ident = DeviceIdentity(host="1.2.3.4", reachable=True,
                            dialect=ApiDialect.LEGACY_WEB, model="E18C")
     with patch.object(flip_mod, "verify_digest", AsyncMock(return_value=False)), \
          patch.object(flip_mod, "identify", AsyncMock(return_value=ident)):
-        res = await enable_api_digest("1.2.3.4", web_user="a", web_pass="b",
-                                      api_user="admin", api_pass="pw")
+        res = await enable_api("1.2.3.4", web_user="a", web_pass="b",
+                               api_user="admin", api_pass="pw")
     assert not res.ok and res.verdict == "unsupported-dialect"
 
 
 @pytest.mark.asyncio
-async def test_enable_api_digest_unreachable():
+async def test_enable_api_unreachable():
     ident = DeviceIdentity(host="1.2.3.4", reachable=False, dialect=ApiDialect.UNKNOWN)
     with patch.object(flip_mod, "verify_digest", AsyncMock(return_value=False)), \
          patch.object(flip_mod, "identify", AsyncMock(return_value=ident)):
-        res = await enable_api_digest("1.2.3.4", web_user="a", web_pass="b",
-                                      api_user="admin", api_pass="pw")
+        res = await enable_api("1.2.3.4", web_user="a", web_pass="b",
+                               api_user="admin", api_pass="pw")
     assert not res.ok and res.verdict == "unreachable"
 
 
 @pytest.mark.asyncio
-async def test_enable_api_digest_fcgi_not_verified_reports_failure():
+async def test_enable_api_fcgi_not_verified_reports_failure():
     ident = DeviceIdentity(host="1.2.3.4", reachable=True,
                            dialect=ApiDialect.FCGI_WEB, model="X916")
     with patch.object(flip_mod, "verify_digest", AsyncMock(return_value=False)), \
          patch.object(flip_mod, "identify", AsyncMock(return_value=ident)), \
          patch.object(flip_mod, "_flip_fcgi", AsyncMock(return_value="")):
-        res = await enable_api_digest("1.2.3.4", web_user="a", web_pass="b",
-                                      api_user="admin", api_pass="pw")
-    assert not res.ok and res.verdict == "flip-not-verified"
+        res = await enable_api("1.2.3.4", web_user="a", web_pass="b",
+                               api_user="admin", api_pass="pw")
+    assert not res.ok and res.verdict == "not-verified"
 
 
 def test_flipresult_defaults():

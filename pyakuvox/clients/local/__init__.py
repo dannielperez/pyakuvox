@@ -9,6 +9,7 @@
 from pyakuvox.clients.local.client import LocalClient
 from pyakuvox.clients.local.flip import (
     FlipResult,
+    enable_api,
     enable_api_digest,
     verify_digest,
 )
@@ -28,6 +29,7 @@ __all__ = [
     "LocalClient",
     "WebApiClient",
     "WebUIClient",
+    "enable_api",
     "enable_api_digest",
     "verify_digest",
 ]
