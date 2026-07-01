@@ -7,7 +7,7 @@
   `identify_many(hosts)` return a `DeviceIdentity` with the `ApiDialect`
   (`DIGEST_API` / `WEB_API` / `LEGACY_WEB` / `FCGI_WEB`) plus model & firmware where
   the firmware leaks them without login. Implements the status-code decision tree
-  validated live across the fleet (`/api/system/info`: 401-realm→digest, 200→digest-open,
+  validated against real hardware (`/api/system/info`: 401-realm→digest, 200→digest-open,
   30x→SPA, 403→E18C-or-whitelist-blocked). `dialect_for_model()` maps a model string.
 - `pyakuvox.AkuvoxDevice`: high-level facade — `AkuvoxDevice.connect(host, user, pw)`
   auto-identifies, connects over the right transport, and exposes firmware-agnostic
