@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added — consumer ergonomics for the typed setters
+- `pyakuvox.SetVerdict` (`StrEnum`): the `set_sip_server` / `set_reg_period` /
+  `set_sip_failover` verdict vocabulary (`would-change` / `already-set` /
+  `set-verified` / `set-did-not-stick` / `account-disabled`) as importable members —
+  consumers stop hand-copying literals. The result dicts now carry the members
+  directly; they compare and JSON-serialize exactly like the historical strings,
+  so `result["verdict"] == "set-verified"` keeps working unchanged.
+- `AkuvoxDevice.from_client(client)`: wrap an already-configured, caller-managed
+  `LocalClient` (custom auth_type/SSL/timeout) without an identify probe or
+  `connect()`'s digest-only auth — derives the `DeviceIdentity` from the client's
+  settings. The caller keeps client lifecycle ownership.
+
 ### Added — typed SIP failover configuration (field-validated recipe)
 - `AkuvoxDevice.set_reg_period(account, seconds=30, apply=)`: typed setter for
   `Config.Account{n}.REG.Timeout`/`.Timeout2` — the registration period gates how fast the
