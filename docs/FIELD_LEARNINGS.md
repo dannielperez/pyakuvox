@@ -37,5 +37,7 @@ devices can lose unsaved config on power loss).
   modern SPA — `WebUIClient.login()` fails with "Failed to get encryption nonce". A meaningful share
   of devices are unreachable for auth-mode flips until this is built (reverse the SPA login + config endpoints).
 - Add a `get_config_data()` helper returning the unwrapped `["data"]` map.
-- Add a typed `set_sip_account(account_idx, server, server2, ...)` + `set_reg_period()` helper.
+- ~~Add a typed `set_sip_account(account_idx, server, server2, ...)` + `set_reg_period()` helper.~~
+  **(done: `AkuvoxDevice.set_sip_server` / `set_reg_period` / `set_sip_failover` — the last is the
+  one-shot recipe: servers + 30s reg period in one write, verify read, reboot-after-apply)**
 - Promote `reboot` capability to VERIFIED.

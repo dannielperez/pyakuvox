@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added — typed SIP failover configuration (field-validated recipe)
+- `AkuvoxDevice.set_reg_period(account, seconds=30, apply=)`: typed setter for
+  `Config.Account{n}.REG.Timeout`/`.Timeout2` — the registration period gates how fast the
+  device fails over to its secondary SIP server (the 1800s default was the slow-failover root
+  cause; 30s is the field-validated value). Dry-run plan by default, verify-after-apply.
+- `AkuvoxDevice.set_sip_failover(account, primary, failover, reg_period_sec=30, apply=,
+  reboot=True)`: one-shot resilient-calling recipe — primary server + failover server +
+  registration period in a SINGLE config write, verify read, then reboot-after-apply
+  (these devices can lose unsaved config on power loss). Same E18C apply refusal and
+  dry-run default as `set_sip_server`.
+- `AkuvoxDevice.account_sip()` now also returns `reg_timeout`/`reg_timeout2`.
+
 ## 0.2.0
 
 ### Added — multi-firmware "bridge engine"
