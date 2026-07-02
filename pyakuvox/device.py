@@ -28,6 +28,7 @@ once an E18C's HTTP API is flipped to Digest it connects normally.
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Any
 
 import structlog
@@ -43,6 +44,28 @@ logger = structlog.get_logger(__name__)
 _BROWSER_ONLY = {ApiDialect.WEB_API, ApiDialect.LEGACY_WEB, ApiDialect.FCGI_WEB}
 
 
+class SetVerdict(StrEnum):
+    """Outcome vocabulary of the ``set_*`` write helpers.
+
+    These are the exact strings returned in the ``verdict`` field of
+    ``set_sip_server`` / ``set_reg_period`` / ``set_sip_failover`` results.
+    Consumers should compare against these members instead of hand-copying
+    the literals. ``StrEnum`` members ARE ``str``, so existing string
+    comparisons and JSON serialization are unaffected.
+
+    The dry-run verdicts (``WOULD_CHANGE``, ``ALREADY_SET``) are successes
+    for a preview; ``SET_VERIFIED`` is the applied-and-confirmed outcome;
+    ``ACCOUNT_DISABLED`` and ``SET_DID_NOT_STICK`` mean the requested state
+    was not (or could not be) reached.
+    """
+
+    ACCOUNT_DISABLED = "account-disabled"
+    ALREADY_SET = "already-set"
+    WOULD_CHANGE = "would-change"
+    SET_VERIFIED = "set-verified"
+    SET_DID_NOT_STICK = "set-did-not-stick"
+
+
 class AkuvoxDevice:
     """A connected Akuvox device with a firmware-agnostic high-level API."""
 
@@ -50,6 +73,7 @@ class AkuvoxDevice:
         self.identity = identity
         self._client = client  # LocalClient (digest)
         self._config_cache: dict[str, Any] | None = None
+        self._owns_client = True  # close() exits the client; from_client() opts out
 
     # ── Construction ────────────────────────────────────────────────
 
@@ -107,6 +131,36 @@ class AkuvoxDevice:
         await client.__aenter__()
         return cls(ident, client)
 
+    @classmethod
+    def from_client(
+        cls,
+        client: Any,
+        *,
+        dialect: ApiDialect | None = None,
+    ) -> AkuvoxDevice:
+        """Wrap an already-connected client without a second ``identify()`` probe.
+
+        For callers that build their own ``LocalClient`` (e.g. to preserve
+        per-credential auth/TLS/timeout settings) and don't want ``connect()``'s
+        identification round-trip. The ``DeviceIdentity`` is derived from the
+        client's ``settings`` (host/port) and marked reachable — the caller
+        vouches for connectivity by owning the client.
+
+        The caller KEEPS ownership of the client's lifecycle: ``close()`` /
+        ``async with`` on the returned device will NOT close a client adopted
+        this way (unlike ``connect()``, which owns the client it opens).
+        """
+        settings = client.settings
+        ident = DeviceIdentity(
+            host=settings.host,
+            port=settings.port,
+            reachable=True,
+            dialect=dialect if dialect is not None else ApiDialect.UNKNOWN,
+        )
+        dev = cls(ident, client)
+        dev._owns_client = False
+        return dev
+
     async def __aenter__(self) -> AkuvoxDevice:
         return self
 
@@ -115,7 +169,8 @@ class AkuvoxDevice:
 
     async def close(self) -> None:
         if self._client is not None:
-            await self._client.__aexit__(None, None, None)
+            if self._owns_client:
+                await self._client.__aexit__(None, None, None)
             self._client = None
 
     # ── Raw config passthrough ──────────────────────────────────────
@@ -221,7 +276,7 @@ class AkuvoxDevice:
         before = {"server": acct["server"], "server2": acct["server2"]}
         if not acct["enabled"]:
             return {"before": before, "plan": {}, "changed": False, "applied": False,
-                    "verdict": "account-disabled"}
+                    "verdict": SetVerdict.ACCOUNT_DISABLED}
 
         diff: dict[str, str] = {}
         plan: dict[str, str] = {}
@@ -234,10 +289,10 @@ class AkuvoxDevice:
 
         if not diff:
             return {"before": before, "plan": {}, "changed": False, "applied": False,
-                    "verdict": "already-set"}
+                    "verdict": SetVerdict.ALREADY_SET}
         if not apply:
             return {"before": before, "plan": plan, "changed": False, "applied": False,
-                    "verdict": "would-change"}
+                    "verdict": SetVerdict.WOULD_CHANGE}
         if keys["server"] == "Config.Account.SIP.Server":
             raise UnsupportedDialectError(
                 "legacy_web", host=self.identity.host,
@@ -248,7 +303,7 @@ class AkuvoxDevice:
         after = await self.account_sip(account)
         ok = after["server"] == primary and (secondary is None or (after["server2"] or "") == secondary)
         return {"before": before, "plan": plan, "changed": True, "applied": True,
-                "verdict": "set-verified" if ok else "set-did-not-stick",
+                "verdict": SetVerdict.SET_VERIFIED if ok else SetVerdict.SET_DID_NOT_STICK,
                 "after": {"server": after["server"], "server2": after["server2"]}}
 
     async def set_reg_period(
@@ -276,7 +331,7 @@ class AkuvoxDevice:
         before = {"reg_timeout": acct["reg_timeout"], "reg_timeout2": acct["reg_timeout2"]}
         if not acct["enabled"]:
             return {"before": before, "plan": {}, "changed": False, "applied": False,
-                    "verdict": "account-disabled"}
+                    "verdict": SetVerdict.ACCOUNT_DISABLED}
 
         want = str(seconds)
         diff: dict[str, str] = {}
@@ -289,10 +344,10 @@ class AkuvoxDevice:
 
         if not diff:
             return {"before": before, "plan": {}, "changed": False, "applied": False,
-                    "verdict": "already-set"}
+                    "verdict": SetVerdict.ALREADY_SET}
         if not apply:
             return {"before": before, "plan": plan, "changed": False, "applied": False,
-                    "verdict": "would-change"}
+                    "verdict": SetVerdict.WOULD_CHANGE}
         if keys["server"] == "Config.Account.SIP.Server":
             raise UnsupportedDialectError(
                 "legacy_web", host=self.identity.host,
@@ -303,7 +358,7 @@ class AkuvoxDevice:
         after = await self.account_sip(account)
         ok = str(after["reg_timeout"]) == want and str(after["reg_timeout2"]) == want
         return {"before": before, "plan": plan, "changed": True, "applied": True,
-                "verdict": "set-verified" if ok else "set-did-not-stick",
+                "verdict": SetVerdict.SET_VERIFIED if ok else SetVerdict.SET_DID_NOT_STICK,
                 "after": {"reg_timeout": after["reg_timeout"],
                           "reg_timeout2": after["reg_timeout2"]}}
 
@@ -339,7 +394,7 @@ class AkuvoxDevice:
                   "reg_timeout": acct["reg_timeout"], "reg_timeout2": acct["reg_timeout2"]}
         if not acct["enabled"]:
             return {"before": before, "plan": {}, "changed": False, "applied": False,
-                    "rebooted": False, "verdict": "account-disabled"}
+                    "rebooted": False, "verdict": SetVerdict.ACCOUNT_DISABLED}
 
         want_period = str(reg_period_sec)
         targets = {
@@ -365,10 +420,10 @@ class AkuvoxDevice:
 
         if not diff:
             return {"before": before, "plan": {}, "changed": False, "applied": False,
-                    "rebooted": False, "verdict": "already-set"}
+                    "rebooted": False, "verdict": SetVerdict.ALREADY_SET}
         if not apply:
             return {"before": before, "plan": plan, "changed": False, "applied": False,
-                    "rebooted": False, "verdict": "would-change"}
+                    "rebooted": False, "verdict": SetVerdict.WOULD_CHANGE}
         if keys["server"] == "Config.Account.SIP.Server":
             raise UnsupportedDialectError(
                 "legacy_web", host=self.identity.host,
@@ -388,7 +443,7 @@ class AkuvoxDevice:
             rebooted = bool(await self.reboot())
         return {"before": before, "plan": plan, "changed": True, "applied": True,
                 "rebooted": rebooted,
-                "verdict": "set-verified" if ok else "set-did-not-stick",
+                "verdict": SetVerdict.SET_VERIFIED if ok else SetVerdict.SET_DID_NOT_STICK,
                 "after": {"server": after["server"], "server2": after["server2"],
                           "reg_timeout": after["reg_timeout"],
                           "reg_timeout2": after["reg_timeout2"]}}

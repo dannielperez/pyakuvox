@@ -7,10 +7,11 @@ All addresses are RFC 5737 documentation IPs (192.0.2.0/24, 198.51.100.0/24,
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
-from pyakuvox.device import AkuvoxDevice
+from pyakuvox.device import AkuvoxDevice, SetVerdict
 from pyakuvox.exceptions import UnsupportedDialectError
 from pyakuvox.identify import ApiDialect, DeviceIdentity
 
@@ -279,3 +280,82 @@ def test_set_sip_failover_refuses_e18c_apply():
     })
     with pytest.raises(UnsupportedDialectError):
         _run(dev.set_sip_failover(2, PRIMARY, FALLBACK, apply=True))
+
+
+# ── SetVerdict vocabulary (consumer contract) ────────────────────────
+
+
+def test_set_verdict_vocabulary_pinned():
+    """The verdict strings are a published contract — consumers key on them."""
+    assert SetVerdict.ACCOUNT_DISABLED == "account-disabled"
+    assert SetVerdict.ALREADY_SET == "already-set"
+    assert SetVerdict.WOULD_CHANGE == "would-change"
+    assert SetVerdict.SET_VERIFIED == "set-verified"
+    assert SetVerdict.SET_DID_NOT_STICK == "set-did-not-stick"
+    assert len(SetVerdict) == 5
+
+
+def test_set_verdict_exported_from_package_root():
+    import pyakuvox
+
+    assert pyakuvox.SetVerdict is SetVerdict
+    assert "SetVerdict" in pyakuvox.__all__
+
+
+def test_helpers_return_setverdict_members():
+    """Returned verdicts are SetVerdict members (and therefore plain str)."""
+    dev = _device(_multi_account_config())
+    res = _run(dev.set_sip_failover(2, PRIMARY, FALLBACK, apply=False))
+    assert res["verdict"] is SetVerdict.WOULD_CHANGE
+    assert isinstance(res["verdict"], str)
+    res = _run(dev.set_reg_period(2, 30, apply=True))
+    assert res["verdict"] is SetVerdict.SET_VERIFIED
+
+
+# ── from_client factory (adopt a caller-owned client) ────────────────
+
+
+class FakeSettingsClient(FakeClient):
+    """FakeClient that also carries connection settings, like LocalClient."""
+
+    def __init__(self, config: dict, host: str = DEVICE_HOST, port: int = 8443):
+        super().__init__(config)
+        self.settings = SimpleNamespace(host=host, port=port)
+        self.exits = 0
+
+    async def __aexit__(self, *args):
+        self.exits += 1
+
+
+def test_from_client_builds_identity_from_settings():
+    client = FakeSettingsClient(_multi_account_config())
+    dev = AkuvoxDevice.from_client(client)
+    assert dev.identity.host == DEVICE_HOST
+    assert dev.identity.port == 8443
+    assert dev.identity.reachable is True
+    assert dev.identity.dialect is ApiDialect.UNKNOWN
+    acct = _run(dev.account_sip(2))  # helpers work through the adopted client
+    assert acct["server"] == FALLBACK
+
+
+def test_from_client_dialect_passthrough():
+    client = FakeSettingsClient(_multi_account_config())
+    dev = AkuvoxDevice.from_client(client, dialect=ApiDialect.DIGEST_API)
+    assert dev.identity.dialect is ApiDialect.DIGEST_API
+
+
+def test_from_client_close_leaves_caller_owned_client_open():
+    client = FakeSettingsClient(_multi_account_config())
+    dev = AkuvoxDevice.from_client(client)
+    _run(dev.close())
+    assert client.exits == 0
+    assert dev._client is None  # device still detaches its reference
+
+
+def test_direct_construction_close_still_exits_client():
+    """Pins the pre-existing ownership default: __init__-built devices own."""
+    client = FakeSettingsClient(_multi_account_config())
+    ident = DeviceIdentity(host=DEVICE_HOST, reachable=True)
+    dev = AkuvoxDevice(ident, client)
+    _run(dev.close())
+    assert client.exits == 1

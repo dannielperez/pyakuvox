@@ -102,6 +102,11 @@ class LocalClient(AkuvoxClientBase):
         self._retry_backoff = retry_backoff
         self._capability_matrix = build_default_matrix()
 
+    @property
+    def settings(self) -> LocalSettings:
+        """The connection settings this client was built with (read-only)."""
+        return self._settings
+
     async def __aenter__(self) -> LocalClient:
         verify: Any = self._settings.verify_ssl
         if getattr(self._settings, "legacy_tls", False) and self._settings.use_ssl:

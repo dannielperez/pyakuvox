@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Added — consumer-contract ergonomics
+- `pyakuvox.SetVerdict` (`StrEnum`): the published verdict vocabulary of the
+  `set_sip_server` / `set_reg_period` / `set_sip_failover` results
+  (`account-disabled` / `already-set` / `would-change` / `set-verified` /
+  `set-did-not-stick`) — consumers compare against members instead of
+  hand-copying literals. Members are `str`, so existing comparisons and JSON
+  serialization are unchanged.
+- `AkuvoxDevice.from_client(client, dialect=None)`: adopt an already-connected
+  `LocalClient` (identity derived from `client.settings`) without a second
+  `identify()` probe. The caller keeps client lifecycle ownership — `close()`
+  on the returned device does NOT close an adopted client (unlike `connect()`,
+  which owns the client it opens).
+- `LocalClient.settings`: read-only accessor for the connection settings.
+
 ### Added — typed SIP failover configuration (field-validated recipe)
 - `AkuvoxDevice.set_reg_period(account, seconds=30, apply=)`: typed setter for
   `Config.Account{n}.REG.Timeout`/`.Timeout2` — the registration period gates how fast the
