@@ -28,6 +28,7 @@ once an E18C's HTTP API is flipped to Digest it connects normally.
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Any
 
 import structlog
@@ -41,6 +42,23 @@ logger = structlog.get_logger(__name__)
 
 # Browser-JS-hashed login dialects we can't drive headlessly (yet).
 _BROWSER_ONLY = {ApiDialect.WEB_API, ApiDialect.LEGACY_WEB, ApiDialect.FCGI_WEB}
+
+
+class SetVerdict(StrEnum):
+    """Verdict vocabulary of the ``set_*`` helpers (``result["verdict"]``).
+
+    ``StrEnum`` members ARE the historical literal strings — existing
+    consumers comparing ``result["verdict"] == "set-verified"`` keep working
+    unchanged, and new consumers can import the members instead of
+    hand-copying literals. The returned dicts carry these members directly
+    (JSON-serializes as the plain string).
+    """
+
+    WOULD_CHANGE = "would-change"        # dry-run: a write is planned
+    ALREADY_SET = "already-set"          # nothing to write (and nothing rebooted)
+    SET_VERIFIED = "set-verified"        # written and re-read matched
+    SET_DID_NOT_STICK = "set-did-not-stick"  # written but re-read mismatched
+    ACCOUNT_DISABLED = "account-disabled"    # refused: target account disabled
 
 
 class AkuvoxDevice:
@@ -106,6 +124,36 @@ class AkuvoxDevice:
         client = LocalClient(settings)
         await client.__aenter__()
         return cls(ident, client)
+
+    @classmethod
+    def from_client(
+        cls,
+        client: Any,
+        *,
+        dialect: ApiDialect = ApiDialect.DIGEST_API,
+    ) -> AkuvoxDevice:
+        """Wrap an already-configured ``LocalClient`` — no identify probe.
+
+        For callers that build their own ``LocalClient`` (custom auth_type /
+        SSL / timeout settings) and manage its lifecycle themselves (e.g.
+        ``async with LocalClient(settings) as client:``): derives the
+        :class:`DeviceIdentity` from the client's settings instead of
+        re-probing the device or forcing ``connect()``'s digest-only auth.
+
+        The caller keeps ownership of the client: when the client is
+        context-managed, do NOT also call :meth:`close` on the wrapper
+        (it would close the underlying client a second time).
+        """
+        settings = getattr(client, "_settings", None)
+        return cls(
+            DeviceIdentity(
+                host=str(getattr(settings, "host", "") or ""),
+                port=int(getattr(settings, "port", 80) or 80),
+                reachable=True,
+                dialect=dialect,
+            ),
+            client,
+        )
 
     async def __aenter__(self) -> AkuvoxDevice:
         return self
@@ -221,7 +269,7 @@ class AkuvoxDevice:
         before = {"server": acct["server"], "server2": acct["server2"]}
         if not acct["enabled"]:
             return {"before": before, "plan": {}, "changed": False, "applied": False,
-                    "verdict": "account-disabled"}
+                    "verdict": SetVerdict.ACCOUNT_DISABLED}
 
         diff: dict[str, str] = {}
         plan: dict[str, str] = {}
@@ -234,10 +282,10 @@ class AkuvoxDevice:
 
         if not diff:
             return {"before": before, "plan": {}, "changed": False, "applied": False,
-                    "verdict": "already-set"}
+                    "verdict": SetVerdict.ALREADY_SET}
         if not apply:
             return {"before": before, "plan": plan, "changed": False, "applied": False,
-                    "verdict": "would-change"}
+                    "verdict": SetVerdict.WOULD_CHANGE}
         if keys["server"] == "Config.Account.SIP.Server":
             raise UnsupportedDialectError(
                 "legacy_web", host=self.identity.host,
@@ -248,7 +296,7 @@ class AkuvoxDevice:
         after = await self.account_sip(account)
         ok = after["server"] == primary and (secondary is None or (after["server2"] or "") == secondary)
         return {"before": before, "plan": plan, "changed": True, "applied": True,
-                "verdict": "set-verified" if ok else "set-did-not-stick",
+                "verdict": SetVerdict.SET_VERIFIED if ok else SetVerdict.SET_DID_NOT_STICK,
                 "after": {"server": after["server"], "server2": after["server2"]}}
 
     async def set_reg_period(
@@ -276,7 +324,7 @@ class AkuvoxDevice:
         before = {"reg_timeout": acct["reg_timeout"], "reg_timeout2": acct["reg_timeout2"]}
         if not acct["enabled"]:
             return {"before": before, "plan": {}, "changed": False, "applied": False,
-                    "verdict": "account-disabled"}
+                    "verdict": SetVerdict.ACCOUNT_DISABLED}
 
         want = str(seconds)
         diff: dict[str, str] = {}
@@ -289,10 +337,10 @@ class AkuvoxDevice:
 
         if not diff:
             return {"before": before, "plan": {}, "changed": False, "applied": False,
-                    "verdict": "already-set"}
+                    "verdict": SetVerdict.ALREADY_SET}
         if not apply:
             return {"before": before, "plan": plan, "changed": False, "applied": False,
-                    "verdict": "would-change"}
+                    "verdict": SetVerdict.WOULD_CHANGE}
         if keys["server"] == "Config.Account.SIP.Server":
             raise UnsupportedDialectError(
                 "legacy_web", host=self.identity.host,
@@ -303,7 +351,7 @@ class AkuvoxDevice:
         after = await self.account_sip(account)
         ok = str(after["reg_timeout"]) == want and str(after["reg_timeout2"]) == want
         return {"before": before, "plan": plan, "changed": True, "applied": True,
-                "verdict": "set-verified" if ok else "set-did-not-stick",
+                "verdict": SetVerdict.SET_VERIFIED if ok else SetVerdict.SET_DID_NOT_STICK,
                 "after": {"reg_timeout": after["reg_timeout"],
                           "reg_timeout2": after["reg_timeout2"]}}
 
@@ -339,7 +387,7 @@ class AkuvoxDevice:
                   "reg_timeout": acct["reg_timeout"], "reg_timeout2": acct["reg_timeout2"]}
         if not acct["enabled"]:
             return {"before": before, "plan": {}, "changed": False, "applied": False,
-                    "rebooted": False, "verdict": "account-disabled"}
+                    "rebooted": False, "verdict": SetVerdict.ACCOUNT_DISABLED}
 
         want_period = str(reg_period_sec)
         targets = {
@@ -365,10 +413,10 @@ class AkuvoxDevice:
 
         if not diff:
             return {"before": before, "plan": {}, "changed": False, "applied": False,
-                    "rebooted": False, "verdict": "already-set"}
+                    "rebooted": False, "verdict": SetVerdict.ALREADY_SET}
         if not apply:
             return {"before": before, "plan": plan, "changed": False, "applied": False,
-                    "rebooted": False, "verdict": "would-change"}
+                    "rebooted": False, "verdict": SetVerdict.WOULD_CHANGE}
         if keys["server"] == "Config.Account.SIP.Server":
             raise UnsupportedDialectError(
                 "legacy_web", host=self.identity.host,
@@ -388,7 +436,7 @@ class AkuvoxDevice:
             rebooted = bool(await self.reboot())
         return {"before": before, "plan": plan, "changed": True, "applied": True,
                 "rebooted": rebooted,
-                "verdict": "set-verified" if ok else "set-did-not-stick",
+                "verdict": SetVerdict.SET_VERIFIED if ok else SetVerdict.SET_DID_NOT_STICK,
                 "after": {"server": after["server"], "server2": after["server2"],
                           "reg_timeout": after["reg_timeout"],
                           "reg_timeout2": after["reg_timeout2"]}}

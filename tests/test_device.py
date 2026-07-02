@@ -279,3 +279,59 @@ def test_set_sip_failover_refuses_e18c_apply():
     })
     with pytest.raises(UnsupportedDialectError):
         _run(dev.set_sip_failover(2, PRIMARY, FALLBACK, apply=True))
+
+
+# ── SetVerdict vocabulary + from_client factory ──────────────────────
+
+
+def test_set_verdict_members_are_the_documented_literals():
+    from pyakuvox.device import SetVerdict
+
+    assert SetVerdict.WOULD_CHANGE == "would-change"
+    assert SetVerdict.ALREADY_SET == "already-set"
+    assert SetVerdict.SET_VERIFIED == "set-verified"
+    assert SetVerdict.SET_DID_NOT_STICK == "set-did-not-stick"
+    assert SetVerdict.ACCOUNT_DISABLED == "account-disabled"
+
+
+def test_set_verdict_exported_from_package_root():
+    import pyakuvox
+
+    assert pyakuvox.SetVerdict is not None
+    assert "SetVerdict" in pyakuvox.__all__
+
+
+def test_verdicts_json_serialize_as_plain_strings():
+    """StrEnum members in the result dict must round-trip like the literals."""
+    import json
+
+    dev = _device(_multi_account_config())
+    res = _run(dev.set_sip_failover(2, PRIMARY, FALLBACK, apply=False))
+    assert json.loads(json.dumps(res))["verdict"] == "would-change"
+
+
+def test_from_client_derives_identity_from_client_settings():
+    from types import SimpleNamespace
+
+    from pyakuvox.identify import ApiDialect
+
+    client = FakeClient(_multi_account_config())
+    client._settings = SimpleNamespace(host=DEVICE_HOST, port=8443)
+    dev = AkuvoxDevice.from_client(client)
+    assert dev.identity.host == DEVICE_HOST
+    assert dev.identity.port == 8443
+    assert dev.identity.reachable is True
+    assert dev.identity.dialect is ApiDialect.DIGEST_API
+    assert dev._client is client  # wraps, never reconnects or probes
+
+
+def test_from_client_wrapper_is_fully_usable():
+    """The factory-built wrapper drives the same recipes as a connected one."""
+    client = FakeClient(_multi_account_config())
+    client._settings = None  # settings-less client still wraps (blank identity)
+    dev = AkuvoxDevice.from_client(client)
+    assert dev.identity.host == ""
+    assert dev.identity.port == 80
+    res = _run(dev.set_sip_failover(2, PRIMARY, FALLBACK, apply=False))
+    assert res["verdict"] == "would-change"
+    assert client.sets == []  # dry-run wrote nothing
