@@ -78,6 +78,20 @@ _DEFAULT_RETRY_BACKOFF = 0.5  # seconds; doubles each attempt
 _MAX_PAGES = 100
 
 
+def sip_registrar_keys(account: int, server: str, server2: str = "") -> dict[str, str]:
+    """Build the autop keys to point an account's SIP registration at *server*.
+
+    Pure helper for :meth:`LocalClient.set_sip_registrar`. ``server2`` is the
+    backup registrar; pass ``""`` for single-path (e.g. tunnel-only). Clearing a
+    stale public ``Server2`` is what un-strands a panel that failed over to the
+    public/SBC path and stuck there.
+    """
+    return {
+        f"Config.Account{account}.SIP.Server": server,
+        f"Config.Account{account}.SIP.Server2": server2,
+    }
+
+
 class LocalClient(AkuvoxClientBase):
     """HTTP client for direct LAN communication with Akuvox devices.
 
@@ -407,6 +421,22 @@ class LocalClient(AkuvoxClientBase):
         )
         if isinstance(resp, dict) and resp.get("retcode") not in (0, None):
             raise DeviceError(f"config set failed: {resp}")
+
+    async def set_sip_registrar(
+        self, account: int, server: str, server2: str = "", *, reboot: bool = False
+    ) -> None:
+        """Point *account*'s SIP registration at *server* (+ optional *server2* backup).
+
+        Convenience over :meth:`set_config` for the fleet repoint — e.g.
+        ``set_sip_registrar(2, "10.254.250.11", "")`` moves Account 2 onto the WG
+        tunnel and clears any (stale, public) backup so it can't fail back off-tunnel.
+        Set ``reboot=True`` to flash-save on firmware that needs it. Server-only writes
+        are safe (they don't disturb the account password). Note: newer SPA firmware
+        may 308-redirect HTTP→HTTPS — use ``LocalSettings(port=443, use_ssl=True)``.
+        """
+        await self.set_config(sip_registrar_keys(account, server, server2))
+        if reboot:
+            await self.reboot()
 
     async def reboot(self) -> bool:
         """Reboot the device.
