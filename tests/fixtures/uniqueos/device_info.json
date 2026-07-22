@@ -1,0 +1,10 @@
+{
+  "retcode": 0,
+  "Status": {
+    "MAC": "02:00:00:00:00:01",
+    "Model": "X916S",
+    "FirmwareVersion": "916.30.10.114",
+    "HardwareVersion": "1.0",
+    "Uptime": "3d 2h"
+  }
+}

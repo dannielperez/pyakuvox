@@ -1,0 +1,10 @@
+{
+  "retcode": 0,
+  "data": {
+    "Status": {
+      "Model": "S539",
+      "FirmwareVersion": "539.30.10.428",
+      "HardwareVersion": "1.0"
+    }
+  }
+}
