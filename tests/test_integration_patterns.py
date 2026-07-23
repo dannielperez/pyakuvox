@@ -1,8 +1,8 @@
-"""Consumer-contract tests mirroring UniqueOS's pyakuvox boundary.
+"""Consumer-contract tests for pyakuvox's public API.
 
 The replay fixtures are sanitized and all transport is in-process. These tests
-pin the exports, exceptions, settings, and typed results that UniqueOS consumes
-through ``uniqueos.devices.services.akuvox_sdk``.
+pin exports, exceptions, settings, and typed results intended for downstream
+integrations.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from pyakuvox import (
     identify,
 )
 
-FIXTURE_DIR = Path(__file__).parent / "fixtures" / "uniqueos"
+FIXTURE_DIR = Path(__file__).parent / "fixtures" / "consumer_contracts"
 
 
 def _fixture(name: str) -> dict[str, object]:
@@ -51,8 +51,8 @@ def _response(payload: dict[str, object]) -> httpx.Response:
     )
 
 
-class TestPublicBoundary:
-    """Pin the names and error hierarchy imported by UniqueOS."""
+class TestPublicApiContract:
+    """Pin the supported public names and error hierarchy."""
 
     def test_consumer_critical_names_are_exported(self) -> None:
         required = {
@@ -92,10 +92,10 @@ class TestPublicBoundary:
         }
 
 
-class TestConsumerConstruction:
-    """Mirror the settings/client construction used by UniqueOS adapters."""
+class TestSupportedConstruction:
+    """Pin supported settings and client construction patterns."""
 
-    def test_settings_accept_the_consumer_keyword_contract(self) -> None:
+    def test_settings_accept_the_public_keyword_contract(self) -> None:
         settings = LocalSettings(
             host="device.example.invalid",
             port=8443,
