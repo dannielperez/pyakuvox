@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import structlog
 
+if TYPE_CHECKING:
+    from collections.abc import MutableMapping
 
 # Patterns to redact from log output — matches common secret field names
 _REDACT_PATTERNS: list[re.Pattern[str]] = [
@@ -29,7 +31,9 @@ def _redact_value(key: str, value: Any) -> Any:
 
 
 def _redact_processor(
-    _logger: Any, _method_name: str, event_dict: dict[str, Any]
+    _logger: Any,
+    _method_name: str,
+    event_dict: MutableMapping[str, Any],
 ) -> dict[str, Any]:
     """Structlog processor that scrubs sensitive keys from log events."""
     return {k: _redact_value(k, v) for k, v in event_dict.items()}
@@ -102,7 +106,7 @@ def configure_logging(*, level: str = "INFO", debug: bool = False) -> None:
 
 def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
     """Get a bound structlog logger, optionally namespaced."""
-    return structlog.get_logger(name)  # type: ignore[return-value]
+    return cast("structlog.stdlib.BoundLogger", structlog.get_logger(name))
 
 
 # Re-export for convenience

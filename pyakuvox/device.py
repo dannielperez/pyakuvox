@@ -29,19 +29,33 @@ once an E18C's HTTP API is flipped to Digest it connects normally.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 import structlog
 
 from pyakuvox.config import LocalAuthType, LocalSettings
 from pyakuvox.exceptions import DeviceError, UnsupportedDialectError
 from pyakuvox.identify import ApiDialect, DeviceIdentity, identify
-from pyakuvox.models.device import DeviceInfo
+
+if TYPE_CHECKING:
+    from pyakuvox.models.device import DeviceInfo
 
 logger = structlog.get_logger(__name__)
 
 # Browser-JS-hashed login dialects we can't drive headlessly (yet).
 _BROWSER_ONLY = {ApiDialect.WEB_API, ApiDialect.LEGACY_WEB, ApiDialect.FCGI_WEB}
+
+
+class _DeviceClient(Protocol):
+    async def __aexit__(self, *args: Any) -> None: ...
+
+    async def get_config(self) -> dict[str, Any]: ...
+
+    async def set_config(self, settings: dict[str, str]) -> None: ...
+
+    async def get_device_info(self) -> DeviceInfo: ...
+
+    async def reboot(self) -> bool: ...
 
 
 class SetVerdict(StrEnum):
@@ -64,9 +78,9 @@ class SetVerdict(StrEnum):
 class AkuvoxDevice:
     """A connected Akuvox device with a firmware-agnostic high-level API."""
 
-    def __init__(self, identity: DeviceIdentity, client: Any) -> None:
+    def __init__(self, identity: DeviceIdentity, client: _DeviceClient) -> None:
         self.identity = identity
-        self._client = client  # LocalClient (digest)
+        self._client: _DeviceClient | None = client
         self._config_cache: dict[str, Any] | None = None
 
     # ── Construction ────────────────────────────────────────────────
@@ -128,7 +142,7 @@ class AkuvoxDevice:
     @classmethod
     def from_client(
         cls,
-        client: Any,
+        client: _DeviceClient,
         *,
         dialect: ApiDialect = ApiDialect.DIGEST_API,
     ) -> AkuvoxDevice:
@@ -166,24 +180,29 @@ class AkuvoxDevice:
             await self._client.__aexit__(None, None, None)
             self._client = None
 
+    def _ensure_client(self) -> _DeviceClient:
+        if self._client is None:
+            raise DeviceError("AkuvoxDevice is closed")
+        return self._client
+
     # ── Raw config passthrough ──────────────────────────────────────
 
     async def get_config(self, *, refresh: bool = False) -> dict[str, Any]:
         """Full autop config (the inner ``data`` map), cached per device."""
         if self._config_cache is None or refresh:
-            raw = await self._client.get_config()
+            raw = await self._ensure_client().get_config()
             self._config_cache = raw.get("data", raw) if isinstance(raw, dict) else {}
         return self._config_cache
 
     async def set_config(self, settings: dict[str, str]) -> None:
-        await self._client.set_config(settings)
+        await self._ensure_client().set_config(settings)
         self._config_cache = None  # invalidate
 
     async def info(self) -> DeviceInfo:
-        return await self._client.get_device_info()
+        return await self._ensure_client().get_device_info()
 
     async def reboot(self) -> bool:
-        return await self._client.reboot()
+        return await self._ensure_client().reboot()
 
     # ── Account / SIP helpers (firmware-agnostic) ───────────────────
 
@@ -294,7 +313,9 @@ class AkuvoxDevice:
             )
         await self.set_config(diff)
         after = await self.account_sip(account)
-        ok = after["server"] == primary and (secondary is None or (after["server2"] or "") == secondary)
+        ok = after["server"] == primary and (
+            secondary is None or (after["server2"] or "") == secondary
+        )
         return {"before": before, "plan": plan, "changed": True, "applied": True,
                 "verdict": SetVerdict.SET_VERIFIED if ok else SetVerdict.SET_DID_NOT_STICK,
                 "after": {"server": after["server"], "server2": after["server2"]}}

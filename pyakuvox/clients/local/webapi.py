@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import structlog
@@ -103,7 +103,7 @@ class WebApiClient:
         if not self._token:
             raise AuthenticationError("Not logged in — call login() first")
 
-    async def _post(self, path: str, payload: dict) -> httpx.Response:
+    async def _post(self, path: str, payload: dict[str, Any]) -> httpx.Response:
         client = self._ensure_client()
         try:
             return await client.post(f"{self.base_url}{path}", json=payload)
@@ -136,9 +136,12 @@ class WebApiClient:
                     "target": "login", "action": "login",
                     "data": {"userName": username, "password": enc},
                 })
-                body = lr.json() if lr.text.lstrip().startswith("{") else {}
-                token = (body.get("data") or {}).get("token")
-                if token:
+                body: dict[str, Any] = (
+                    lr.json() if lr.text.lstrip().startswith("{") else {}
+                )
+                data = body.get("data")
+                token = data.get("token") if isinstance(data, dict) else None
+                if isinstance(token, str) and token:
                     self._token = token
                     self._ensure_client().cookies.set("token", token, domain=self._host)
                     log.info("webapi_login_success", host=self._host)
@@ -161,7 +164,10 @@ class WebApiClient:
                              {"target": "config", "action": "get", "data": {"item": keys}})
         if r.status_code != 200:
             raise DeviceError(f"config/get HTTP {r.status_code} on {self._host}")
-        return (r.json().get("data") or {}) if r.text.lstrip().startswith("{") else {}
+        if not r.text.lstrip().startswith("{"):
+            return {}
+        data = r.json().get("data") or {}
+        return cast("dict[str, str]", data) if isinstance(data, dict) else {}
 
     async def _config_set(self, data: dict[str, str]) -> None:
         self._ensure_session()

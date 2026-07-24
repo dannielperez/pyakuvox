@@ -33,7 +33,9 @@ from __future__ import annotations
 import asyncio
 import json
 import ssl
+from contextlib import suppress
 from enum import StrEnum
+from typing import Any
 
 import httpx
 import structlog
@@ -113,18 +115,14 @@ def _legacy_ctx() -> ssl.SSLContext:
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
-    try:
+    with suppress(ValueError, AttributeError):
         ctx.minimum_version = ssl.TLSVersion.MINIMUM_SUPPORTED
-    except (ValueError, AttributeError):
-        pass
-    try:
+    with suppress(ssl.SSLError):
         ctx.set_ciphers("DEFAULT@SECLEVEL=0")
-    except ssl.SSLError:
-        pass
     return ctx
 
 
-def _parse_status_block(text: str) -> dict:
+def _parse_status_block(text: str) -> dict[str, Any]:
     """Pull the ``data.Status`` block from an Akuvox JSON body.
 
     Tolerates trailing bytes after the JSON and non-UTF8 content (E18C serves
@@ -158,7 +156,11 @@ async def _probe_web_api(client: httpx.AsyncClient, host: str) -> tuple[str, str
         if r is not None and r.status_code == 200:
             s = _parse_status_block(r.text)
             if s.get("Model"):
-                return s.get("Model", ""), s.get("FirmwareVersion", ""), s.get("HardwareVersion", "")
+                return (
+                    s.get("Model", ""),
+                    s.get("FirmwareVersion", ""),
+                    s.get("HardwareVersion", ""),
+                )
     return None
 
 
@@ -188,7 +190,7 @@ async def identify(
     across a whole subnet. ``transport`` is an injection seam for tests.
     """
     ident = DeviceIdentity(host=host, port=port)
-    client_kwargs: dict = {
+    client_kwargs: dict[str, Any] = {
         "timeout": httpx.Timeout(timeout),
         "follow_redirects": False,
     }

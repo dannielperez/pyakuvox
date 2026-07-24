@@ -1,5 +1,7 @@
 """pyakuvox: Proof-of-concept Python library for Akuvox intercom integration."""
 
+from typing import TYPE_CHECKING
+
 __version__ = "0.2.0"
 
 from pyakuvox.exceptions import (
@@ -31,7 +33,7 @@ from pyakuvox.network import (
     render_url,
 )
 
-try:
+if TYPE_CHECKING:
     from pyakuvox.clients.local.client import LocalClient
     from pyakuvox.clients.local.flip import (
         FlipResult,
@@ -42,19 +44,31 @@ try:
     from pyakuvox.config import LocalAuthType, LocalSettings
     from pyakuvox.device import AkuvoxDevice, SetVerdict
     from pyakuvox.models.device import DeviceInfo, DeviceStatus, RelayState
-except ModuleNotFoundError:  # pragma: no cover - supports lightweight helper imports
-    LocalClient = None  # type: ignore[assignment]
-    FlipResult = None  # type: ignore[assignment]
-    enable_api = None  # type: ignore[assignment]
-    enable_api_digest = None  # type: ignore[assignment]
-    verify_digest = None  # type: ignore[assignment]
-    LocalAuthType = None  # type: ignore[assignment]
-    LocalSettings = None  # type: ignore[assignment]
-    AkuvoxDevice = None  # type: ignore[assignment]
-    SetVerdict = None  # type: ignore[assignment]
-    DeviceInfo = None  # type: ignore[assignment]
-    DeviceStatus = None  # type: ignore[assignment]
-    RelayState = None  # type: ignore[assignment]
+else:
+    try:
+        from pyakuvox.clients.local.client import LocalClient
+        from pyakuvox.clients.local.flip import (
+            FlipResult,
+            enable_api,
+            enable_api_digest,
+            verify_digest,
+        )
+        from pyakuvox.config import LocalAuthType, LocalSettings
+        from pyakuvox.device import AkuvoxDevice, SetVerdict
+        from pyakuvox.models.device import DeviceInfo, DeviceStatus, RelayState
+    except ModuleNotFoundError:  # pragma: no cover - supports lightweight helper imports
+        LocalClient = None
+        FlipResult = None
+        enable_api = None
+        enable_api_digest = None
+        verify_digest = None
+        LocalAuthType = None
+        LocalSettings = None
+        AkuvoxDevice = None
+        SetVerdict = None
+        DeviceInfo = None
+        DeviceStatus = None
+        RelayState = None
 
 __all__ = [
     "AkuvoxDevice",
