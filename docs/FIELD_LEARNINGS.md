@@ -27,8 +27,9 @@ a multi-device deployment over a VPN. Drove the fixes below; the rest are TODOs.
 
 ## SIP failover config (Account 2)
 Keys: `Config.Account2.GENERAL.Enable`/`.Label`, `Config.Account2.SIP.Server`/`.Server2`/
-`.Port`/`.Port2`/`.TransType` (0=UDP), **`Config.Account2.REG.Timeout`/`.Timeout2`** (registration
-period — was **1800s** by default, the real cause of slow failover; set to **30**).
+`.Port`/`.Port2`/`.TransType` (0=UDP), `Config.Account2.GENERAL.UserName`/`.AuthName`/
+`.Pwd`, **`Config.Account2.REG.Timeout`/`.Timeout2`** (registration period — was **1800s**
+by default, the real cause of slow failover; set to **30**).
 Dual-server = explicit internal-primary + public-failover. **Reboot after any change** (these
 devices can lose unsaved config on power loss).
 
@@ -38,6 +39,6 @@ devices can lose unsaved config on power loss).
   of devices are unreachable for auth-mode flips until this is built (reverse the SPA login + config endpoints).
 - Add a `get_config_data()` helper returning the unwrapped `["data"]` map.
 - ~~Add a typed `set_sip_account(account_idx, server, server2, ...)` + `set_reg_period()` helper.~~
-  **(done: `AkuvoxDevice.set_sip_server` / `set_reg_period` / `set_sip_failover` — the last is the
-  one-shot recipe: servers + 30s reg period in one write, verify read, reboot-after-apply)**
+  **(done: `AkuvoxDevice.set_sip_account` / `set_sip_server` / `set_reg_period` /
+  `set_sip_failover`; complete account provisioning and failover recipes both verify by read-back)**
 - Promote `reboot` capability to VERIFIED.

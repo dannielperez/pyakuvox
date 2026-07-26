@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Added — typed complete SIP-account provisioning
+- `AkuvoxDevice.set_sip_account(...)`: resolves the multi-account versus E18C
+  namespace, writes the canonical server/port/transport/username/auth/password
+  fields, enables the account, and verifies every requested value by read-back.
+  Results redact password values and report `set-did-not-stick` when firmware
+  silently ignores a write.
+
 ### Added — consumer ergonomics for the typed setters
 - `pyakuvox.SetVerdict` (`StrEnum`): the `set_sip_server` / `set_reg_period` /
   `set_sip_failover` verdict vocabulary (`would-change` / `already-set` /
