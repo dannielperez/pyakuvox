@@ -44,6 +44,12 @@ logger = structlog.get_logger(__name__)
 
 # Browser-JS-hashed login dialects we can't drive headlessly (yet).
 _BROWSER_ONLY = {ApiDialect.WEB_API, ApiDialect.LEGACY_WEB, ApiDialect.FCGI_WEB}
+_SIP_TRANSPORT_CODES = {
+    "udp": "0",
+    "tcp": "1",
+    "tls": "2",
+    "dns-naptr": "3",
+}
 
 
 class _DeviceClient(Protocol):
@@ -68,11 +74,11 @@ class SetVerdict(StrEnum):
     (JSON-serializes as the plain string).
     """
 
-    WOULD_CHANGE = "would-change"        # dry-run: a write is planned
-    ALREADY_SET = "already-set"          # nothing to write (and nothing rebooted)
-    SET_VERIFIED = "set-verified"        # written and re-read matched
+    WOULD_CHANGE = "would-change"  # dry-run: a write is planned
+    ALREADY_SET = "already-set"  # nothing to write (and nothing rebooted)
+    SET_VERIFIED = "set-verified"  # written and re-read matched
     SET_DID_NOT_STICK = "set-did-not-stick"  # written but re-read mismatched
-    ACCOUNT_DISABLED = "account-disabled"    # refused: target account disabled
+    ACCOUNT_DISABLED = "account-disabled"  # refused: target account disabled
 
 
 class AkuvoxDevice:
@@ -221,7 +227,11 @@ class AkuvoxDevice:
                 "server": f"{base}.SIP.Server",
                 "server2": f"{base}.SIP.Server2",
                 "port": f"{base}.SIP.Port",
+                "transport": f"{base}.SIP.TransType",
                 "enable": f"{base}.GENERAL.Enable",
+                "username": f"{base}.GENERAL.UserName",
+                "auth_name": f"{base}.GENERAL.AuthName",
+                "password": f"{base}.GENERAL.Pwd",
                 "reg_timeout": f"{base}.REG.Timeout",
                 "reg_timeout2": f"{base}.REG.Timeout2",
             }
@@ -230,7 +240,11 @@ class AkuvoxDevice:
                 "server": "Config.Account.SIP.Server",
                 "server2": "Config.Account.OUTPROXY.Server",  # E18C fallback = outbound proxy
                 "port": "Config.Account.SIP.Port",
+                "transport": "Config.Account.SIP.TransType",
                 "enable": "Config.Account.GENERAL.Enable",
+                "username": "Config.Account.GENERAL.UserName",
+                "auth_name": "Config.Account.GENERAL.AuthName",
+                "password": "Config.Account.GENERAL.Pwd",
                 "reg_timeout": "Config.Account.REG.Timeout",
                 "reg_timeout2": "Config.Account.REG.Timeout2",
             }
@@ -242,10 +256,11 @@ class AkuvoxDevice:
     async def account_sip(self, account: int = 2) -> dict[str, Any]:
         """Read a SIP account's routing in a uniform, address-agnostic shape.
 
-        Returns ``{'server','server2','port','enable','enabled','has_fallback',
-        'reg_timeout','reg_timeout2','keys'}``. ``has_fallback`` is True when a
-        secondary server is set. The SDK makes no judgement about which address
-        is "good" — the caller owns that policy.
+        Returns ``{'server','server2','port','transport','enable','enabled',
+        'username','auth_name','has_fallback','reg_timeout','reg_timeout2',
+        'keys'}``. ``has_fallback`` is True when a secondary server is set. The
+        SDK makes no judgement about which address is "good" — the caller owns
+        that policy. Passwords are never returned.
         """
         cfg = await self.get_config()
         keys = self._resolve_account_keys(cfg, account)
@@ -255,12 +270,110 @@ class AkuvoxDevice:
             "server": server,
             "server2": server2,
             "port": cfg.get(keys["port"]),
+            "transport": cfg.get(keys["transport"]),
             "enable": cfg.get(keys["enable"]),
             "enabled": str(cfg.get(keys["enable"])) in ("1", "true", "True"),
+            "username": cfg.get(keys["username"]),
+            "auth_name": cfg.get(keys["auth_name"]),
             "has_fallback": bool(server2),
             "reg_timeout": cfg.get(keys["reg_timeout"]),
             "reg_timeout2": cfg.get(keys["reg_timeout2"]),
             "keys": keys,
+        }
+
+    async def set_sip_account(
+        self,
+        account: int,
+        *,
+        server: str,
+        username: str,
+        password: str,
+        port: int | str = 5060,
+        transport: str = "udp",
+        apply: bool = False,
+    ) -> dict[str, Any]:
+        """Configure and verify one complete SIP registration account.
+
+        Resolves the firmware's account namespace before writing the canonical
+        AutoP fields. ``transport`` accepts ``udp``, ``tcp``, ``tls``, or
+        ``dns-naptr`` and is encoded to Akuvox's numeric ``SIP.TransType``.
+
+        Result dictionaries never contain the current or requested password.
+        Default is a dry-run plan. ``apply=True`` writes and re-reads the full
+        account, returning ``set-verified`` only when every requested value
+        persisted. E18C single-account writes remain unsupported because that
+        dialect requires the keyed ``/web`` edit envelope.
+        """
+        transport_name = transport.strip().lower()
+        try:
+            transport_code = _SIP_TRANSPORT_CODES[transport_name]
+        except KeyError as exc:
+            supported = ", ".join(_SIP_TRANSPORT_CODES)
+            raise ValueError(
+                f"unsupported SIP transport {transport!r}; expected {supported}"
+            ) from exc
+
+        cfg = await self.get_config()
+        keys = self._resolve_account_keys(cfg, account)
+        wants = {
+            "enable": "1",
+            "server": str(server),
+            "port": str(port),
+            "transport": transport_code,
+            "username": str(username),
+            "auth_name": str(username),
+            "password": str(password),
+        }
+        before = {name: cfg.get(keys[name]) for name in wants if name != "password"}
+        before["password_set"] = bool(cfg.get(keys["password"]))
+
+        diff: dict[str, str] = {}
+        plan: dict[str, str] = {}
+        for name, want in wants.items():
+            have = "" if cfg.get(keys[name]) is None else str(cfg[keys[name]])
+            if have == want:
+                continue
+            diff[keys[name]] = want
+            plan[name] = (
+                "<redacted> -> <redacted>" if name == "password" else f"{have!r} -> {want!r}"
+            )
+
+        if not diff:
+            return {
+                "before": before,
+                "plan": {},
+                "changed": False,
+                "applied": False,
+                "verdict": SetVerdict.ALREADY_SET,
+            }
+        if not apply:
+            return {
+                "before": before,
+                "plan": plan,
+                "changed": False,
+                "applied": False,
+                "verdict": SetVerdict.WOULD_CHANGE,
+            }
+        if keys["server"] == "Config.Account.SIP.Server":
+            raise UnsupportedDialectError(
+                "legacy_web",
+                host=self.identity.host,
+                hint="E18C single-account writes need the keyed /web edit "
+                "envelope (action=edit, '<value>&<cfgId>&<keyNum>'), not flat set",
+            )
+
+        await self.set_config(diff)
+        after_cfg = await self.get_config()
+        verified = all(str(after_cfg.get(keys[name], "")) == want for name, want in wants.items())
+        after = {name: after_cfg.get(keys[name]) for name in wants if name != "password"}
+        after["password_set"] = bool(after_cfg.get(keys["password"]))
+        return {
+            "before": before,
+            "plan": plan,
+            "changed": True,
+            "applied": True,
+            "verdict": (SetVerdict.SET_VERIFIED if verified else SetVerdict.SET_DID_NOT_STICK),
+            "after": after,
         }
 
     async def set_sip_server(
@@ -287,8 +400,13 @@ class AkuvoxDevice:
         keys = acct["keys"]
         before = {"server": acct["server"], "server2": acct["server2"]}
         if not acct["enabled"]:
-            return {"before": before, "plan": {}, "changed": False, "applied": False,
-                    "verdict": SetVerdict.ACCOUNT_DISABLED}
+            return {
+                "before": before,
+                "plan": {},
+                "changed": False,
+                "applied": False,
+                "verdict": SetVerdict.ACCOUNT_DISABLED,
+            }
 
         diff: dict[str, str] = {}
         plan: dict[str, str] = {}
@@ -300,14 +418,25 @@ class AkuvoxDevice:
             plan["server2"] = f"{acct['server2']!r} -> {secondary!r}"
 
         if not diff:
-            return {"before": before, "plan": {}, "changed": False, "applied": False,
-                    "verdict": SetVerdict.ALREADY_SET}
+            return {
+                "before": before,
+                "plan": {},
+                "changed": False,
+                "applied": False,
+                "verdict": SetVerdict.ALREADY_SET,
+            }
         if not apply:
-            return {"before": before, "plan": plan, "changed": False, "applied": False,
-                    "verdict": SetVerdict.WOULD_CHANGE}
+            return {
+                "before": before,
+                "plan": plan,
+                "changed": False,
+                "applied": False,
+                "verdict": SetVerdict.WOULD_CHANGE,
+            }
         if keys["server"] == "Config.Account.SIP.Server":
             raise UnsupportedDialectError(
-                "legacy_web", host=self.identity.host,
+                "legacy_web",
+                host=self.identity.host,
                 hint="E18C single-account SIP server needs the keyed /web edit "
                 "envelope (action=edit, '<value>&<cfgId>&<keyNum>'), not flat set",
             )
@@ -316,9 +445,14 @@ class AkuvoxDevice:
         ok = after["server"] == primary and (
             secondary is None or (after["server2"] or "") == secondary
         )
-        return {"before": before, "plan": plan, "changed": True, "applied": True,
-                "verdict": SetVerdict.SET_VERIFIED if ok else SetVerdict.SET_DID_NOT_STICK,
-                "after": {"server": after["server"], "server2": after["server2"]}}
+        return {
+            "before": before,
+            "plan": plan,
+            "changed": True,
+            "applied": True,
+            "verdict": SetVerdict.SET_VERIFIED if ok else SetVerdict.SET_DID_NOT_STICK,
+            "after": {"server": after["server"], "server2": after["server2"]},
+        }
 
     async def set_reg_period(
         self,
@@ -344,8 +478,13 @@ class AkuvoxDevice:
         keys = acct["keys"]
         before = {"reg_timeout": acct["reg_timeout"], "reg_timeout2": acct["reg_timeout2"]}
         if not acct["enabled"]:
-            return {"before": before, "plan": {}, "changed": False, "applied": False,
-                    "verdict": SetVerdict.ACCOUNT_DISABLED}
+            return {
+                "before": before,
+                "plan": {},
+                "changed": False,
+                "applied": False,
+                "verdict": SetVerdict.ACCOUNT_DISABLED,
+            }
 
         want = str(seconds)
         diff: dict[str, str] = {}
@@ -357,24 +496,39 @@ class AkuvoxDevice:
                 plan[field] = f"{have!r} -> {want!r}"
 
         if not diff:
-            return {"before": before, "plan": {}, "changed": False, "applied": False,
-                    "verdict": SetVerdict.ALREADY_SET}
+            return {
+                "before": before,
+                "plan": {},
+                "changed": False,
+                "applied": False,
+                "verdict": SetVerdict.ALREADY_SET,
+            }
         if not apply:
-            return {"before": before, "plan": plan, "changed": False, "applied": False,
-                    "verdict": SetVerdict.WOULD_CHANGE}
+            return {
+                "before": before,
+                "plan": plan,
+                "changed": False,
+                "applied": False,
+                "verdict": SetVerdict.WOULD_CHANGE,
+            }
         if keys["server"] == "Config.Account.SIP.Server":
             raise UnsupportedDialectError(
-                "legacy_web", host=self.identity.host,
+                "legacy_web",
+                host=self.identity.host,
                 hint="E18C single-account writes need the keyed /web edit "
                 "envelope (action=edit, '<value>&<cfgId>&<keyNum>'), not flat set",
             )
         await self.set_config(diff)
         after = await self.account_sip(account)
         ok = str(after["reg_timeout"]) == want and str(after["reg_timeout2"]) == want
-        return {"before": before, "plan": plan, "changed": True, "applied": True,
-                "verdict": SetVerdict.SET_VERIFIED if ok else SetVerdict.SET_DID_NOT_STICK,
-                "after": {"reg_timeout": after["reg_timeout"],
-                          "reg_timeout2": after["reg_timeout2"]}}
+        return {
+            "before": before,
+            "plan": plan,
+            "changed": True,
+            "applied": True,
+            "verdict": SetVerdict.SET_VERIFIED if ok else SetVerdict.SET_DID_NOT_STICK,
+            "after": {"reg_timeout": after["reg_timeout"], "reg_timeout2": after["reg_timeout2"]},
+        }
 
     async def set_sip_failover(
         self,
@@ -404,11 +558,21 @@ class AkuvoxDevice:
         """
         acct = await self.account_sip(account)
         keys = acct["keys"]
-        before = {"server": acct["server"], "server2": acct["server2"],
-                  "reg_timeout": acct["reg_timeout"], "reg_timeout2": acct["reg_timeout2"]}
+        before = {
+            "server": acct["server"],
+            "server2": acct["server2"],
+            "reg_timeout": acct["reg_timeout"],
+            "reg_timeout2": acct["reg_timeout2"],
+        }
         if not acct["enabled"]:
-            return {"before": before, "plan": {}, "changed": False, "applied": False,
-                    "rebooted": False, "verdict": SetVerdict.ACCOUNT_DISABLED}
+            return {
+                "before": before,
+                "plan": {},
+                "changed": False,
+                "applied": False,
+                "rebooted": False,
+                "verdict": SetVerdict.ACCOUNT_DISABLED,
+            }
 
         want_period = str(reg_period_sec)
         targets = {
@@ -433,14 +597,27 @@ class AkuvoxDevice:
                 plan[name] = f"{have!r} -> {want!r}"
 
         if not diff:
-            return {"before": before, "plan": {}, "changed": False, "applied": False,
-                    "rebooted": False, "verdict": SetVerdict.ALREADY_SET}
+            return {
+                "before": before,
+                "plan": {},
+                "changed": False,
+                "applied": False,
+                "rebooted": False,
+                "verdict": SetVerdict.ALREADY_SET,
+            }
         if not apply:
-            return {"before": before, "plan": plan, "changed": False, "applied": False,
-                    "rebooted": False, "verdict": SetVerdict.WOULD_CHANGE}
+            return {
+                "before": before,
+                "plan": plan,
+                "changed": False,
+                "applied": False,
+                "rebooted": False,
+                "verdict": SetVerdict.WOULD_CHANGE,
+            }
         if keys["server"] == "Config.Account.SIP.Server":
             raise UnsupportedDialectError(
-                "legacy_web", host=self.identity.host,
+                "legacy_web",
+                host=self.identity.host,
                 hint="E18C single-account writes need the keyed /web edit "
                 "envelope (action=edit, '<value>&<cfgId>&<keyNum>'), not flat set",
             )
@@ -455,9 +632,17 @@ class AkuvoxDevice:
         rebooted = False
         if reboot:
             rebooted = bool(await self.reboot())
-        return {"before": before, "plan": plan, "changed": True, "applied": True,
-                "rebooted": rebooted,
-                "verdict": SetVerdict.SET_VERIFIED if ok else SetVerdict.SET_DID_NOT_STICK,
-                "after": {"server": after["server"], "server2": after["server2"],
-                          "reg_timeout": after["reg_timeout"],
-                          "reg_timeout2": after["reg_timeout2"]}}
+        return {
+            "before": before,
+            "plan": plan,
+            "changed": True,
+            "applied": True,
+            "rebooted": rebooted,
+            "verdict": SetVerdict.SET_VERIFIED if ok else SetVerdict.SET_DID_NOT_STICK,
+            "after": {
+                "server": after["server"],
+                "server2": after["server2"],
+                "reg_timeout": after["reg_timeout"],
+                "reg_timeout2": after["reg_timeout2"],
+            },
+        }

@@ -15,8 +15,8 @@ from pyakuvox.exceptions import UnsupportedDialectError
 from pyakuvox.identify import ApiDialect, DeviceIdentity
 
 # Generic stand-in addresses supplied by the caller, never by the SDK.
-PRIMARY = "203.0.113.10"      # e.g. a primary/internal SIP server
-FALLBACK = "198.51.100.20"    # e.g. a secondary/public SIP server
+PRIMARY = "203.0.113.10"  # e.g. a primary/internal SIP server
+FALLBACK = "198.51.100.20"  # e.g. a secondary/public SIP server
 DEVICE_HOST = "192.0.2.9"
 
 
@@ -40,6 +40,13 @@ class FakeClient:
         return True
 
 
+class NonStickingClient(FakeClient):
+    """Records writes while simulating firmware that silently ignores them."""
+
+    async def set_config(self, settings):
+        self.sets.append(settings)
+
+
 def _device(config: dict, dialect=ApiDialect.DIGEST_API) -> AkuvoxDevice:
     ident = DeviceIdentity(host=DEVICE_HOST, reachable=True, dialect=dialect)
     return AkuvoxDevice(ident, FakeClient(config))
@@ -53,11 +60,13 @@ def _run(coro):
 
 
 def test_multi_account_keys_resolved():
-    dev = _device({
-        "Config.Account2.SIP.Server": FALLBACK,
-        "Config.Account2.SIP.Server2": "",
-        "Config.Account2.GENERAL.Enable": "1",
-    })
+    dev = _device(
+        {
+            "Config.Account2.SIP.Server": FALLBACK,
+            "Config.Account2.SIP.Server2": "",
+            "Config.Account2.GENERAL.Enable": "1",
+        }
+    )
     acct = _run(dev.account_sip(2))
     assert acct["keys"]["server"] == "Config.Account2.SIP.Server"
     assert acct["server"] == FALLBACK
@@ -66,11 +75,13 @@ def test_multi_account_keys_resolved():
 
 
 def test_e18c_single_account_namespace():
-    dev = _device({
-        "Config.Account.SIP.Server": PRIMARY,
-        "Config.Account.OUTPROXY.Server": "",
-        "Config.Account.GENERAL.Enable": "1",
-    })
+    dev = _device(
+        {
+            "Config.Account.SIP.Server": PRIMARY,
+            "Config.Account.OUTPROXY.Server": "",
+            "Config.Account.GENERAL.Enable": "1",
+        }
+    )
     acct = _run(dev.account_sip(2))  # logical "Account2" maps to the single E18C account
     assert acct["keys"]["server"] == "Config.Account.SIP.Server"
     assert acct["keys"]["server2"] == "Config.Account.OUTPROXY.Server"
@@ -81,11 +92,13 @@ def test_e18c_single_account_namespace():
 
 
 def test_set_sip_server_dry_run_plans_change():
-    dev = _device({
-        "Config.Account2.SIP.Server": FALLBACK,
-        "Config.Account2.SIP.Server2": FALLBACK,
-        "Config.Account2.GENERAL.Enable": "1",
-    })
+    dev = _device(
+        {
+            "Config.Account2.SIP.Server": FALLBACK,
+            "Config.Account2.SIP.Server2": FALLBACK,
+            "Config.Account2.GENERAL.Enable": "1",
+        }
+    )
     res = _run(dev.set_sip_server(2, PRIMARY, secondary="", apply=False))
     assert res["verdict"] == "would-change"
     assert res["applied"] is False
@@ -93,11 +106,13 @@ def test_set_sip_server_dry_run_plans_change():
 
 
 def test_set_sip_server_apply_writes_and_verifies():
-    dev = _device({
-        "Config.Account2.SIP.Server": PRIMARY,
-        "Config.Account2.SIP.Server2": FALLBACK,
-        "Config.Account2.GENERAL.Enable": "1",
-    })
+    dev = _device(
+        {
+            "Config.Account2.SIP.Server": PRIMARY,
+            "Config.Account2.SIP.Server2": FALLBACK,
+            "Config.Account2.GENERAL.Enable": "1",
+        }
+    )
     res = _run(dev.set_sip_server(2, PRIMARY, secondary="", apply=True))
     assert res["verdict"] == "set-verified"
     assert res["applied"] is True
@@ -106,44 +121,52 @@ def test_set_sip_server_apply_writes_and_verifies():
 
 
 def test_set_sip_server_leaves_secondary_untouched_when_none():
-    dev = _device({
-        "Config.Account2.SIP.Server": FALLBACK,
-        "Config.Account2.SIP.Server2": FALLBACK,
-        "Config.Account2.GENERAL.Enable": "1",
-    })
+    dev = _device(
+        {
+            "Config.Account2.SIP.Server": FALLBACK,
+            "Config.Account2.SIP.Server2": FALLBACK,
+            "Config.Account2.GENERAL.Enable": "1",
+        }
+    )
     res = _run(dev.set_sip_server(2, PRIMARY, apply=True))  # secondary=None
     assert res["verdict"] == "set-verified"
     assert dev._client.sets[0] == {"Config.Account2.SIP.Server": PRIMARY}  # server2 not touched
 
 
 def test_set_sip_server_already_set_is_noop():
-    dev = _device({
-        "Config.Account2.SIP.Server": PRIMARY,
-        "Config.Account2.SIP.Server2": "",
-        "Config.Account2.GENERAL.Enable": "1",
-    })
+    dev = _device(
+        {
+            "Config.Account2.SIP.Server": PRIMARY,
+            "Config.Account2.SIP.Server2": "",
+            "Config.Account2.GENERAL.Enable": "1",
+        }
+    )
     res = _run(dev.set_sip_server(2, PRIMARY, secondary="", apply=True))
     assert res["verdict"] == "already-set"
     assert dev._client.sets == []
 
 
 def test_set_sip_server_account_disabled():
-    dev = _device({
-        "Config.Account2.SIP.Server": FALLBACK,
-        "Config.Account2.SIP.Server2": FALLBACK,
-        "Config.Account2.GENERAL.Enable": "0",
-    })
+    dev = _device(
+        {
+            "Config.Account2.SIP.Server": FALLBACK,
+            "Config.Account2.SIP.Server2": FALLBACK,
+            "Config.Account2.GENERAL.Enable": "0",
+        }
+    )
     res = _run(dev.set_sip_server(2, PRIMARY, secondary="", apply=True))
     assert res["verdict"] == "account-disabled"
     assert dev._client.sets == []
 
 
 def test_set_sip_server_refuses_e18c_apply():
-    dev = _device({
-        "Config.Account.SIP.Server": FALLBACK,
-        "Config.Account.OUTPROXY.Server": FALLBACK,
-        "Config.Account.GENERAL.Enable": "1",
-    })
+    dev = _device(
+        {
+            "Config.Account.SIP.Server": FALLBACK,
+            "Config.Account.OUTPROXY.Server": FALLBACK,
+            "Config.Account.GENERAL.Enable": "1",
+        }
+    )
     with pytest.raises(UnsupportedDialectError):
         _run(dev.set_sip_server(2, PRIMARY, secondary="", apply=True))
 
@@ -155,7 +178,12 @@ def _multi_account_config(**overrides) -> dict:
     cfg = {
         "Config.Account2.SIP.Server": FALLBACK,
         "Config.Account2.SIP.Server2": "",
+        "Config.Account2.SIP.Port": "5060",
+        "Config.Account2.SIP.TransType": "0",
         "Config.Account2.GENERAL.Enable": "1",
+        "Config.Account2.GENERAL.UserName": "old-user",
+        "Config.Account2.GENERAL.AuthName": "old-user",
+        "Config.Account2.GENERAL.Pwd": "old-password",
         "Config.Account2.REG.Timeout": "1800",
         "Config.Account2.REG.Timeout2": "1800",
     }
@@ -192,24 +220,165 @@ def test_set_reg_period_apply_writes_both_and_verifies():
 
 
 def test_set_reg_period_already_set_is_noop():
-    dev = _device(_multi_account_config(**{
-        "Config.Account2.REG.Timeout": "30",
-        "Config.Account2.REG.Timeout2": "30",
-    }))
+    dev = _device(
+        _multi_account_config(
+            **{
+                "Config.Account2.REG.Timeout": "30",
+                "Config.Account2.REG.Timeout2": "30",
+            }
+        )
+    )
     res = _run(dev.set_reg_period(2, 30, apply=True))
     assert res["verdict"] == "already-set"
     assert dev._client.sets == []
 
 
 def test_set_reg_period_refuses_e18c_apply():
-    dev = _device({
-        "Config.Account.SIP.Server": FALLBACK,
-        "Config.Account.OUTPROXY.Server": "",
-        "Config.Account.GENERAL.Enable": "1",
-        "Config.Account.REG.Timeout": "1800",
-    })
+    dev = _device(
+        {
+            "Config.Account.SIP.Server": FALLBACK,
+            "Config.Account.OUTPROXY.Server": "",
+            "Config.Account.GENERAL.Enable": "1",
+            "Config.Account.REG.Timeout": "1800",
+        }
+    )
     with pytest.raises(UnsupportedDialectError):
         _run(dev.set_reg_period(2, 30, apply=True))
+
+
+# ── complete SIP-account provisioning ──────────────────────────────
+
+
+def test_set_sip_account_apply_writes_canonical_keys_and_verifies():
+    dev = _device(_multi_account_config())
+
+    res = _run(
+        dev.set_sip_account(
+            2,
+            server=PRIMARY,
+            username="1001",
+            password="new-secret",
+            port=5070,
+            transport="tcp",
+            apply=True,
+        )
+    )
+
+    assert res["verdict"] == "set-verified"
+    assert res["applied"] is True
+    assert dev._client.sets == [
+        {
+            "Config.Account2.SIP.Server": PRIMARY,
+            "Config.Account2.SIP.Port": "5070",
+            "Config.Account2.SIP.TransType": "1",
+            "Config.Account2.GENERAL.UserName": "1001",
+            "Config.Account2.GENERAL.AuthName": "1001",
+            "Config.Account2.GENERAL.Pwd": "new-secret",
+        }
+    ]
+
+
+def test_set_sip_account_result_never_discloses_password():
+    dev = _device(_multi_account_config())
+
+    res = _run(
+        dev.set_sip_account(
+            2,
+            server=PRIMARY,
+            username="1001",
+            password="new-secret",
+            apply=True,
+        )
+    )
+
+    assert "new-secret" not in repr(res)
+    assert "old-password" not in repr(res)
+
+
+def test_set_sip_account_detects_silent_noop():
+    config = _multi_account_config()
+    ident = DeviceIdentity(
+        host=DEVICE_HOST,
+        reachable=True,
+        dialect=ApiDialect.DIGEST_API,
+    )
+    dev = AkuvoxDevice(ident, NonStickingClient(config))
+
+    res = _run(
+        dev.set_sip_account(
+            2,
+            server=PRIMARY,
+            username="1001",
+            password="new-secret",
+            apply=True,
+        )
+    )
+
+    assert res["verdict"] == "set-did-not-stick"
+    assert res["applied"] is True
+    assert "new-secret" not in repr(res)
+
+
+def test_set_sip_account_enables_disabled_account():
+    dev = _device(_multi_account_config(**{"Config.Account2.GENERAL.Enable": "0"}))
+
+    res = _run(
+        dev.set_sip_account(
+            2,
+            server=PRIMARY,
+            username="1001",
+            password="new-secret",
+            apply=True,
+        )
+    )
+
+    assert res["verdict"] == "set-verified"
+    assert dev._client.sets[0]["Config.Account2.GENERAL.Enable"] == "1"
+
+
+def test_set_sip_account_rejects_unknown_transport_without_writing():
+    dev = _device(_multi_account_config())
+
+    with pytest.raises(ValueError, match="transport"):
+        _run(
+            dev.set_sip_account(
+                2,
+                server=PRIMARY,
+                username="1001",
+                password="new-secret",
+                transport="sctp",
+                apply=True,
+            )
+        )
+
+    assert dev._client.sets == []
+
+
+def test_set_sip_account_refuses_e18c_apply():
+    dev = _device(
+        {
+            "Config.Account.SIP.Server": FALLBACK,
+            "Config.Account.SIP.Port": "5060",
+            "Config.Account.SIP.TransType": "0",
+            "Config.Account.GENERAL.Enable": "1",
+            "Config.Account.GENERAL.UserName": "old-user",
+            "Config.Account.GENERAL.AuthName": "old-user",
+            "Config.Account.GENERAL.Pwd": "old-password",
+        }
+    )
+
+    with pytest.raises(UnsupportedDialectError):
+        _run(
+            dev.set_sip_account(
+                2,
+                server=PRIMARY,
+                username="1001",
+                password="new-secret",
+                apply=True,
+            )
+        )
+
+    assert dev._client.sets == []
 
 
 # ── set_sip_failover composite (servers + reg period + reboot) ──────
@@ -233,12 +402,14 @@ def test_set_sip_failover_apply_single_write_verify_reboot():
     assert res["applied"] is True
     assert res["rebooted"] is True
     # ONE combined config write: both servers + both reg-timeout keys
-    assert dev._client.sets == [{
-        "Config.Account2.SIP.Server": PRIMARY,
-        "Config.Account2.SIP.Server2": FALLBACK,
-        "Config.Account2.REG.Timeout": "30",
-        "Config.Account2.REG.Timeout2": "30",
-    }]
+    assert dev._client.sets == [
+        {
+            "Config.Account2.SIP.Server": PRIMARY,
+            "Config.Account2.SIP.Server2": FALLBACK,
+            "Config.Account2.REG.Timeout": "30",
+            "Config.Account2.REG.Timeout2": "30",
+        }
+    ]
     assert dev._client.reboots == 1
 
 
@@ -251,12 +422,16 @@ def test_set_sip_failover_reboot_false_skips_reboot():
 
 
 def test_set_sip_failover_already_set_skips_write_and_reboot():
-    dev = _device(_multi_account_config(**{
-        "Config.Account2.SIP.Server": PRIMARY,
-        "Config.Account2.SIP.Server2": FALLBACK,
-        "Config.Account2.REG.Timeout": "30",
-        "Config.Account2.REG.Timeout2": "30",
-    }))
+    dev = _device(
+        _multi_account_config(
+            **{
+                "Config.Account2.SIP.Server": PRIMARY,
+                "Config.Account2.SIP.Server2": FALLBACK,
+                "Config.Account2.REG.Timeout": "30",
+                "Config.Account2.REG.Timeout2": "30",
+            }
+        )
+    )
     res = _run(dev.set_sip_failover(2, PRIMARY, FALLBACK, apply=True))
     assert res["verdict"] == "already-set"
     assert dev._client.sets == []
@@ -272,11 +447,13 @@ def test_set_sip_failover_account_disabled():
 
 
 def test_set_sip_failover_refuses_e18c_apply():
-    dev = _device({
-        "Config.Account.SIP.Server": FALLBACK,
-        "Config.Account.OUTPROXY.Server": "",
-        "Config.Account.GENERAL.Enable": "1",
-    })
+    dev = _device(
+        {
+            "Config.Account.SIP.Server": FALLBACK,
+            "Config.Account.OUTPROXY.Server": "",
+            "Config.Account.GENERAL.Enable": "1",
+        }
+    )
     with pytest.raises(UnsupportedDialectError):
         _run(dev.set_sip_failover(2, PRIMARY, FALLBACK, apply=True))
 
