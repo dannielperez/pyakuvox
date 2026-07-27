@@ -42,7 +42,7 @@ if TYPE_CHECKING:
         verify_digest,
     )
     from pyakuvox.config import LocalAuthType, LocalSettings
-    from pyakuvox.device import AkuvoxDevice, SetVerdict
+    from pyakuvox.device import AkuvoxDevice, SetResult, SetVerdict
     from pyakuvox.models.device import DeviceInfo, DeviceStatus, RelayState
 else:
     try:
@@ -54,7 +54,7 @@ else:
             verify_digest,
         )
         from pyakuvox.config import LocalAuthType, LocalSettings
-        from pyakuvox.device import AkuvoxDevice, SetVerdict
+        from pyakuvox.device import AkuvoxDevice, SetResult, SetVerdict
         from pyakuvox.models.device import DeviceInfo, DeviceStatus, RelayState
     except ModuleNotFoundError:  # pragma: no cover - supports lightweight helper imports
         LocalClient = None
@@ -65,6 +65,7 @@ else:
         LocalAuthType = None
         LocalSettings = None
         AkuvoxDevice = None
+        SetResult = None
         SetVerdict = None
         DeviceInfo = None
         DeviceStatus = None
@@ -90,6 +91,7 @@ __all__ = [
     "NetworkConfig",
     "ParseError",
     "RelayState",
+    "SetResult",
     "SetVerdict",
     "TimeoutError",
     "UnsupportedDialectError",
