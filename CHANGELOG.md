@@ -10,6 +10,7 @@
   silently ignores a write.
 
 ### Added — consumer ergonomics for the typed setters
+- `pyakuvox.SetResult` (`TypedDict`): shared typed result for `set_sip_account`, `set_sip_server`, and `set_reg_period`, preserving their plain-dict runtime API.
 - `pyakuvox.SetVerdict` (`StrEnum`): the `set_sip_server` / `set_reg_period` /
   `set_sip_failover` verdict vocabulary (`would-change` / `already-set` /
   `set-verified` / `set-did-not-stick` / `account-disabled`) as importable members —

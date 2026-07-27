@@ -7,10 +7,11 @@ All addresses are RFC 5737 documentation IPs (192.0.2.0/24, 198.51.100.0/24,
 from __future__ import annotations
 
 import asyncio
+from typing import NotRequired, get_args, get_origin, get_type_hints, is_typeddict
 
 import pytest
 
-from pyakuvox.device import AkuvoxDevice
+from pyakuvox.device import AkuvoxDevice, SetResult, SetVerdict
 from pyakuvox.exceptions import UnsupportedDialectError
 from pyakuvox.identify import ApiDialect, DeviceIdentity
 
@@ -476,6 +477,94 @@ def test_set_verdict_exported_from_package_root():
 
     assert pyakuvox.SetVerdict is not None
     assert "SetVerdict" in pyakuvox.__all__
+
+
+def test_set_result_typed_dict_contract():
+    import pyakuvox
+
+    value_map = dict[str, str | bool | None]
+    assert is_typeddict(SetResult)
+    assert get_type_hints(SetResult) == {
+        "before": value_map,
+        "plan": dict[str, str],
+        "changed": bool,
+        "applied": bool,
+        "verdict": SetVerdict,
+        "after": value_map,
+    }
+    after_hint = get_type_hints(SetResult, include_extras=True)["after"]
+    assert get_origin(after_hint) is NotRequired
+    assert get_args(after_hint) == (value_map,)
+    for method in (
+        AkuvoxDevice.set_sip_account,
+        AkuvoxDevice.set_sip_server,
+        AkuvoxDevice.set_reg_period,
+    ):
+        assert get_type_hints(method)["return"] is SetResult
+    assert pyakuvox.SetResult is SetResult
+    assert "SetResult" in pyakuvox.__all__
+
+
+@pytest.mark.parametrize(
+    ("path", "expected_verdict", "expected_keys"),
+    [
+        (
+            "already-set",
+            SetVerdict.ALREADY_SET,
+            {"before", "plan", "changed", "applied", "verdict"},
+        ),
+        (
+            "would-change",
+            SetVerdict.WOULD_CHANGE,
+            {"before", "plan", "changed", "applied", "verdict"},
+        ),
+        (
+            "applied",
+            SetVerdict.SET_VERIFIED,
+            {"before", "plan", "changed", "applied", "verdict", "after"},
+        ),
+    ],
+)
+def test_set_result_key_sets_for_every_typed_setter(
+    path: str,
+    expected_verdict: SetVerdict,
+    expected_keys: set[str],
+):
+    already_set = path == "already-set"
+    apply = path != "would-change"
+
+    account_result = _run(
+        _device(_multi_account_config()).set_sip_account(
+            2,
+            server=FALLBACK if already_set else PRIMARY,
+            username="old-user" if already_set else "1001",
+            password="old-password" if already_set else "new-secret",
+            apply=apply,
+        )
+    )
+    server_result = _run(
+        _device(_multi_account_config()).set_sip_server(
+            2,
+            FALLBACK if already_set else PRIMARY,
+            secondary="",
+            apply=apply,
+        )
+    )
+    period_config = (
+        _multi_account_config(
+            **{
+                "Config.Account2.REG.Timeout": "30",
+                "Config.Account2.REG.Timeout2": "30",
+            }
+        )
+        if already_set
+        else _multi_account_config()
+    )
+    period_result = _run(_device(period_config).set_reg_period(2, 30, apply=apply))
+
+    for result in (account_result, server_result, period_result):
+        assert result["verdict"] is expected_verdict
+        assert set(result) == expected_keys
 
 
 def test_verdicts_json_serialize_as_plain_strings():

@@ -29,7 +29,7 @@ once an E18C's HTTP API is flipped to Digest it connects normally.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, NotRequired, Protocol, TypedDict
 
 import structlog
 
@@ -79,6 +79,17 @@ class SetVerdict(StrEnum):
     SET_VERIFIED = "set-verified"  # written and re-read matched
     SET_DID_NOT_STICK = "set-did-not-stick"  # written but re-read mismatched
     ACCOUNT_DISABLED = "account-disabled"  # refused: target account disabled
+
+
+class SetResult(TypedDict):
+    """Result shared by setters that plan, apply, and verify config changes."""
+
+    before: dict[str, str | bool | None]
+    plan: dict[str, str]
+    changed: bool
+    applied: bool
+    verdict: SetVerdict
+    after: NotRequired[dict[str, str | bool | None]]
 
 
 class AkuvoxDevice:
@@ -291,7 +302,7 @@ class AkuvoxDevice:
         port: int | str = 5060,
         transport: str = "udp",
         apply: bool = False,
-    ) -> dict[str, Any]:
+    ) -> SetResult:
         """Configure and verify one complete SIP registration account.
 
         Resolves the firmware's account namespace before writing the canonical
@@ -383,7 +394,7 @@ class AkuvoxDevice:
         *,
         secondary: str | None = None,
         apply: bool = False,
-    ) -> dict[str, Any]:
+    ) -> SetResult:
         """Set an account's primary SIP server (and optionally its secondary).
 
         Generic, address-agnostic primitive — the caller supplies the server
@@ -460,7 +471,7 @@ class AkuvoxDevice:
         seconds: int = 30,
         *,
         apply: bool = False,
-    ) -> dict[str, Any]:
+    ) -> SetResult:
         """Set an account's SIP registration period (``REG.Timeout``/``.Timeout2``).
 
         The device only re-registers — and therefore fails over to the
