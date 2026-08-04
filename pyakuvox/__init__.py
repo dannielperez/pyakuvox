@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 __version__ = "0.2.0"
 
+from pyakuvox.capture import RTSPFrame, capture_rtsp_frame
 from pyakuvox.exceptions import (
     AkuvoxError,
     ApiAccessForbiddenError,
@@ -32,6 +33,7 @@ from pyakuvox.network import (
     render_body,
     render_url,
 )
+from pyakuvox.rtsp import RTSPStreamConfig, build_rtsp_url
 
 if TYPE_CHECKING:
     from pyakuvox.clients.local.client import LocalClient
@@ -90,6 +92,8 @@ __all__ = [
     "LocalSettings",
     "NetworkConfig",
     "ParseError",
+    "RTSPFrame",
+    "RTSPStreamConfig",
     "RelayState",
     "SetResult",
     "SetVerdict",
@@ -97,6 +101,8 @@ __all__ = [
     "UnsupportedDialectError",
     "UnsupportedFeatureError",
     "build_config_set_payload",
+    "build_rtsp_url",
+    "capture_rtsp_frame",
     "dialect_for_model",
     "enable_api",
     "enable_api_digest",
