@@ -11,8 +11,14 @@ from typing import NotRequired, get_args, get_origin, get_type_hints, is_typeddi
 
 import pytest
 
-from pyakuvox.device import AkuvoxDevice, SetResult, SetVerdict
-from pyakuvox.exceptions import UnsupportedDialectError
+from pyakuvox.device import (
+    AkuvoxDevice,
+    CredentialRotationVerdict,
+    SetResult,
+    SetVerdict,
+)
+from pyakuvox.exceptions import AmbiguousMutationError, UnsupportedDialectError
+from pyakuvox.exceptions import TimeoutError as AkuvoxTimeoutError
 from pyakuvox.identify import ApiDialect, DeviceIdentity
 
 # Generic stand-in addresses supplied by the caller, never by the SDK.
@@ -48,6 +54,22 @@ class NonStickingClient(FakeClient):
         self.sets.append(settings)
 
 
+class TimingOutWriteClient(FakeClient):
+    async def set_config(self, settings):
+        self.sets.append(settings)
+        raise AkuvoxTimeoutError("write timed out")
+
+
+class FailedWriteClient(FakeClient):
+    def __init__(self, config: dict, error: Exception):
+        super().__init__(config)
+        self._error = error
+
+    async def set_config(self, settings):
+        self.sets.append(settings)
+        raise self._error
+
+
 def _device(config: dict, dialect=ApiDialect.DIGEST_API) -> AkuvoxDevice:
     ident = DeviceIdentity(host=DEVICE_HOST, reachable=True, dialect=dialect)
     return AkuvoxDevice(ident, FakeClient(config))
@@ -55,6 +77,154 @@ def _device(config: dict, dialect=ApiDialect.DIGEST_API) -> AkuvoxDevice:
 
 def _run(coro):
     return asyncio.run(coro)
+
+
+def _access_media_config() -> dict[str, str]:
+    return {
+        "Config.DoorSetting.APIFCGI.Enable": "1",
+        "Config.DoorSetting.APIFCGI.AuthMode": "1",
+        "Config.DoorSetting.APIFCGI.UserName": "admin",
+        "Config.DoorSetting.APIFCGI.Password": "old-password",
+        "Config.DoorSetting.RTSP.Enable": "0",
+        "Config.DoorSetting.RTSP.Authorization": "0",
+        "Config.DoorSetting.RTSP.MJPEGAuthorization": "0",
+        "Config.DoorSetting.RTSP.AuthenticationType": "0",
+        "Config.DoorSetting.RTSP.Username": "viewer",
+        "Config.DoorSetting.RTSP.Password": "old-rtsp-password",
+        "Config.OnvifServer.DEVICE.Mode": "0",
+        "Config.OnvifServer.DEVICE.User": "onvif",
+        "Config.OnvifServer.DEVICE.Pwd": "old-onvif-password",
+    }
+
+
+def test_rotate_access_media_credentials_is_one_secret_free_write():
+    dev = _device(_access_media_config())
+
+    result = _run(
+        dev.rotate_access_media_credentials(
+            "operator",
+            "new-secret",
+            apply=True,
+        ),
+    )
+
+    assert result["verdict"] is CredentialRotationVerdict.APPLIED_PENDING_RECONNECT
+    assert result["applied"] is True
+    assert dev._client.sets == [
+        {
+            "Config.DoorSetting.APIFCGI.AuthMode": "4",
+            "Config.DoorSetting.APIFCGI.UserName": "operator",
+            "Config.DoorSetting.APIFCGI.Password": "new-secret",
+            "Config.DoorSetting.RTSP.Enable": "1",
+            "Config.DoorSetting.RTSP.Authorization": "1",
+            "Config.DoorSetting.RTSP.MJPEGAuthorization": "1",
+            "Config.DoorSetting.RTSP.AuthenticationType": "1",
+            "Config.DoorSetting.RTSP.Username": "operator",
+            "Config.DoorSetting.RTSP.Password": "new-secret",
+            "Config.OnvifServer.DEVICE.Mode": "1",
+            "Config.OnvifServer.DEVICE.User": "operator",
+            "Config.OnvifServer.DEVICE.Pwd": "new-secret",
+        },
+    ]
+    assert "new-secret" not in repr(result)
+    assert "old-password" not in repr(result)
+    assert "old-rtsp-password" not in repr(result)
+    assert "old-onvif-password" not in repr(result)
+
+
+def test_rotate_access_media_credentials_dry_run_does_not_write():
+    dev = _device(_access_media_config())
+
+    result = _run(
+        dev.rotate_access_media_credentials("operator", "new-secret"),
+    )
+
+    assert result["verdict"] is CredentialRotationVerdict.WOULD_CHANGE
+    assert result["applied"] is False
+    assert dev._client.sets == []
+    assert "new-secret" not in repr(result)
+
+
+def test_rotate_access_media_credentials_resolves_r29_rtsp_keys():
+    config = _access_media_config()
+    for key in (
+        "Config.DoorSetting.RTSP.Authorization",
+        "Config.DoorSetting.RTSP.MJPEGAuthorization",
+        "Config.DoorSetting.RTSP.Username",
+        "Config.DoorSetting.RTSP.Password",
+    ):
+        config.pop(key)
+    config.update(
+        {
+            "Config.DoorSetting.RTSP.AuthEnable": "0",
+            "Config.DoorSetting.MJPEGSERVICE.Authorization": "0",
+            "Config.DoorSetting.RTSP.UserName": "admin",
+            "Config.DoorSetting.RTSP.UserPasswd": "old-password",
+        },
+    )
+    dev = _device(config)
+
+    _run(dev.rotate_access_media_credentials("operator", "new-secret", apply=True))
+
+    written = dev._client.sets[0]
+    assert written["Config.DoorSetting.RTSP.AuthEnable"] == "1"
+    assert written["Config.DoorSetting.MJPEGSERVICE.Authorization"] == "1"
+    assert written["Config.DoorSetting.RTSP.UserName"] == "operator"
+    assert written["Config.DoorSetting.RTSP.UserPasswd"] == "new-secret"
+    assert written["Config.DoorSetting.RTSP.AuthenticationType"] == "1"
+
+
+def test_rotate_access_media_credentials_wraps_ambiguous_write_timeout():
+    ident = DeviceIdentity(host=DEVICE_HOST, reachable=True, dialect=ApiDialect.DIGEST_API)
+    dev = AkuvoxDevice(ident, TimingOutWriteClient(_access_media_config()))
+
+    with pytest.raises(AmbiguousMutationError):
+        _run(
+            dev.rotate_access_media_credentials(
+                "operator",
+                "new-secret",
+                apply=True,
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(Exception("401 after apply"), id="post-write-auth"),
+        pytest.param(Exception("500 after apply"), id="post-write-device-error"),
+        pytest.param(Exception("empty response"), id="post-write-parse-error"),
+    ],
+)
+def test_rotate_access_media_credentials_wraps_every_post_dispatch_error(error):
+    ident = DeviceIdentity(host=DEVICE_HOST, reachable=True, dialect=ApiDialect.DIGEST_API)
+    dev = AkuvoxDevice(ident, FailedWriteClient(_access_media_config(), error))
+
+    with pytest.raises(AmbiguousMutationError):
+        _run(
+            dev.rotate_access_media_credentials(
+                "operator",
+                "new-secret",
+                apply=True,
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("username", "password", "message"),
+    [("", "secret", "username"), ("admin", "", "password")],
+)
+def test_rotate_access_media_credentials_rejects_empty_credentials(
+    username,
+    password,
+    message,
+):
+    dev = _device(_access_media_config())
+
+    with pytest.raises(ValueError, match=message):
+        _run(dev.rotate_access_media_credentials(username, password, apply=True))
+
+    assert dev._client.sets == []
 
 
 # ── account-key resolution across firmware namespaces ───────────────

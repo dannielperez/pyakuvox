@@ -24,6 +24,10 @@ class TimeoutError(AkuvoxError):
     """Request timed out."""
 
 
+class AmbiguousMutationError(AkuvoxError):
+    """A mutating request started but its final device outcome is unknown."""
+
+
 # ── Authentication ──────────────────────────────────────────────────
 
 
@@ -108,7 +112,7 @@ class UnsupportedFeatureError(AkuvoxError):
         self.provider = provider
 
 
-class ExperimentalFeatureWarning(AkuvoxError):
+class ExperimentalFeatureWarning(AkuvoxError):  # noqa: N818 - public compatibility
     """Raised (or logged) when using an unverified/experimental feature.
 
     Not necessarily fatal — services may catch this and proceed with

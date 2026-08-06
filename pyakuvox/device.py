@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Any, NotRequired, Protocol, TypedDict
 import structlog
 
 from pyakuvox.config import LocalAuthType, LocalSettings
-from pyakuvox.exceptions import DeviceError, UnsupportedDialectError
+from pyakuvox.exceptions import AmbiguousMutationError, DeviceError, UnsupportedDialectError
 from pyakuvox.identify import ApiDialect, DeviceIdentity, identify
 
 if TYPE_CHECKING:
@@ -81,6 +81,13 @@ class SetVerdict(StrEnum):
     ACCOUNT_DISABLED = "account-disabled"  # refused: target account disabled
 
 
+class CredentialRotationVerdict(StrEnum):
+    """Outcome vocabulary for a coordinated access/media credential write."""
+
+    WOULD_CHANGE = "would-change"
+    APPLIED_PENDING_RECONNECT = "applied-pending-reconnect"
+
+
 class SetResult(TypedDict):
     """Result shared by setters that plan, apply, and verify config changes."""
 
@@ -90,6 +97,61 @@ class SetResult(TypedDict):
     applied: bool
     verdict: SetVerdict
     after: NotRequired[dict[str, str | bool | None]]
+
+
+class CredentialRotationResult(TypedDict):
+    """Secret-free result from :meth:`rotate_access_media_credentials`."""
+
+    before: dict[str, str | bool]
+    plan: dict[str, str]
+    applied: bool
+    verdict: CredentialRotationVerdict
+
+
+_ACCESS_MEDIA_KEYS = {
+    "api_enabled": "Config.DoorSetting.APIFCGI.Enable",
+    "api_auth_mode": "Config.DoorSetting.APIFCGI.AuthMode",
+    "api_username": "Config.DoorSetting.APIFCGI.UserName",
+    "api_password": "Config.DoorSetting.APIFCGI.Password",
+    "rtsp_enabled": "Config.DoorSetting.RTSP.Enable",
+    "rtsp_authorization": "Config.DoorSetting.RTSP.Authorization",
+    "rtsp_mjpeg_authorization": "Config.DoorSetting.RTSP.MJPEGAuthorization",
+    "rtsp_auth_mode": "Config.DoorSetting.RTSP.AuthenticationType",
+    "rtsp_username": "Config.DoorSetting.RTSP.Username",
+    "rtsp_password": "Config.DoorSetting.RTSP.Password",
+    "onvif_enabled": "Config.OnvifServer.DEVICE.Mode",
+    "onvif_username": "Config.OnvifServer.DEVICE.User",
+    "onvif_password": "Config.OnvifServer.DEVICE.Pwd",
+}
+_ACCESS_MEDIA_SECRET_NAMES = frozenset(
+    {"api_password", "rtsp_password", "onvif_password"},
+)
+
+
+def _resolve_access_media_keys(cfg: dict[str, Any]) -> dict[str, str]:
+    """Resolve documented R29 vs newer door-phone AutoP key variants."""
+    keys = dict(_ACCESS_MEDIA_KEYS)
+    candidates = {
+        "rtsp_authorization": (
+            "Config.DoorSetting.RTSP.AuthEnable",
+            "Config.DoorSetting.RTSP.Authorization",
+        ),
+        "rtsp_mjpeg_authorization": (
+            "Config.DoorSetting.MJPEGSERVICE.Authorization",
+            "Config.DoorSetting.RTSP.MJPEGAuthorization",
+        ),
+        "rtsp_username": (
+            "Config.DoorSetting.RTSP.UserName",
+            "Config.DoorSetting.RTSP.Username",
+        ),
+        "rtsp_password": (
+            "Config.DoorSetting.RTSP.UserPasswd",
+            "Config.DoorSetting.RTSP.Password",
+        ),
+    }
+    for name, variants in candidates.items():
+        keys[name] = next((key for key in variants if key in cfg), keys[name])
+    return keys
 
 
 class AkuvoxDevice:
@@ -220,6 +282,86 @@ class AkuvoxDevice:
 
     async def reboot(self) -> bool:
         return await self._ensure_client().reboot()
+
+    async def rotate_access_media_credentials(
+        self,
+        username: str,
+        password: str,
+        *,
+        apply: bool = False,
+    ) -> CredentialRotationResult:
+        """Keep management API, RTSP, and ONVIF on one credential pair.
+
+        The write enables the HTTP API in Akuvox Digest mode (``AuthMode=4``),
+        enables RTSP authorization for both H.264 and MJPEG, and enables ONVIF.
+        RTSP ``AuthenticationType=1`` pins Digest (``0`` is Basic). The operation
+        uses one config write so the three device-owned credential surfaces
+        cannot drift between separate successful calls.
+
+        Changing the API password invalidates the current authenticated client,
+        so this method deliberately does not claim read-back verification. The
+        caller must reconnect with the requested credential before persisting it.
+        Returned data never includes either the old or requested password.
+        """
+        username = str(username).strip()
+        if not username:
+            raise ValueError("username is required")
+        if not password:
+            raise ValueError("password is required")
+
+        cfg = await self.get_config(refresh=True)
+        keys = _resolve_access_media_keys(cfg)
+        wants = {
+            "api_enabled": "1",
+            "api_auth_mode": "4",
+            "api_username": username,
+            "api_password": password,
+            "rtsp_enabled": "1",
+            "rtsp_authorization": "1",
+            "rtsp_mjpeg_authorization": "1",
+            "rtsp_auth_mode": "1",
+            "rtsp_username": username,
+            "rtsp_password": password,
+            "onvif_enabled": "1",
+            "onvif_username": username,
+            "onvif_password": password,
+        }
+        before: dict[str, str | bool] = {}
+        plan: dict[str, str] = {}
+        raw_plan: dict[str, str] = {}
+        for name, want in wants.items():
+            key = keys[name]
+            have = cfg.get(key)
+            if name in _ACCESS_MEDIA_SECRET_NAMES:
+                before[f"{name}_set"] = bool(have)
+                plan[name] = "<redacted> -> <redacted>"
+                raw_plan[key] = want
+            else:
+                before[name] = "" if have is None else str(have)
+                if str(have) != want:
+                    plan[name] = f"{have!r} -> {want!r}"
+                    raw_plan[key] = want
+
+        if not apply:
+            return {
+                "before": before,
+                "plan": plan,
+                "applied": False,
+                "verdict": CredentialRotationVerdict.WOULD_CHANGE,
+            }
+
+        try:
+            await self.set_config(raw_plan)
+        except Exception as exc:
+            raise AmbiguousMutationError(
+                "Credential config write started but was not confirmed.",
+            ) from exc
+        return {
+            "before": before,
+            "plan": plan,
+            "applied": True,
+            "verdict": CredentialRotationVerdict.APPLIED_PENDING_RECONNECT,
+        }
 
     # ── Account / SIP helpers (firmware-agnostic) ───────────────────
 
