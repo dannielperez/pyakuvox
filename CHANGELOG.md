@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added — coordinated access/media credential rotation
+- `AkuvoxDevice.rotate_access_media_credentials(...)` writes HTTP API Digest,
+  RTSP Digest authorization, RTSP/MJPEG credentials, and ONVIF credentials in
+  one non-retried config mutation. It resolves documented R29/newer RTSP key
+  variants, never returns passwords, and reports every post-dispatch exception
+  as `AmbiguousMutationError` so callers cannot blindly retry an unknown write.
+- `CredentialRotationResult` and `CredentialRotationVerdict` provide a typed,
+  secret-free planning/application result.
+
 ### Added — typed complete SIP-account provisioning
 - `AkuvoxDevice.set_sip_account(...)`: resolves the multi-account versus E18C
   namespace, writes the canonical server/port/transport/username/auth/password

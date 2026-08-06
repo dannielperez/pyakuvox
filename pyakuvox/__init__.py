@@ -7,6 +7,7 @@ __version__ = "0.2.0"
 from pyakuvox.capture import RTSPFrame, capture_rtsp_frame
 from pyakuvox.exceptions import (
     AkuvoxError,
+    AmbiguousMutationError,
     ApiAccessForbiddenError,
     AuthenticationError,
     ConnectionError,
@@ -44,7 +45,13 @@ if TYPE_CHECKING:
         verify_digest,
     )
     from pyakuvox.config import LocalAuthType, LocalSettings
-    from pyakuvox.device import AkuvoxDevice, SetResult, SetVerdict
+    from pyakuvox.device import (
+        AkuvoxDevice,
+        CredentialRotationResult,
+        CredentialRotationVerdict,
+        SetResult,
+        SetVerdict,
+    )
     from pyakuvox.models.device import DeviceInfo, DeviceStatus, RelayState
 else:
     try:
@@ -56,7 +63,13 @@ else:
             verify_digest,
         )
         from pyakuvox.config import LocalAuthType, LocalSettings
-        from pyakuvox.device import AkuvoxDevice, SetResult, SetVerdict
+        from pyakuvox.device import (
+            AkuvoxDevice,
+            CredentialRotationResult,
+            CredentialRotationVerdict,
+            SetResult,
+            SetVerdict,
+        )
         from pyakuvox.models.device import DeviceInfo, DeviceStatus, RelayState
     except ModuleNotFoundError:  # pragma: no cover - supports lightweight helper imports
         LocalClient = None
@@ -67,6 +80,8 @@ else:
         LocalAuthType = None
         LocalSettings = None
         AkuvoxDevice = None
+        CredentialRotationResult = None
+        CredentialRotationVerdict = None
         SetResult = None
         SetVerdict = None
         DeviceInfo = None
@@ -76,11 +91,14 @@ else:
 __all__ = [
     "AkuvoxDevice",
     "AkuvoxError",
+    "AmbiguousMutationError",
     "ApiAccessForbiddenError",
     "ApiDialect",
     "AuthenticationError",
     "ConfigKeyMap",
     "ConnectionError",
+    "CredentialRotationResult",
+    "CredentialRotationVerdict",
     "CustomPostProfile",
     "DeviceError",
     "DeviceIdentity",
