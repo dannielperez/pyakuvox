@@ -14,6 +14,10 @@ def test_capture_rtsp_frame_returns_jpeg_bytes():
     assert result.ok is True
     assert result.image_bytes == b"jpeg"
     assert run.call_args.kwargs["timeout"] == 10
+    assert "user" not in repr(run.call_args.args[0])
+    assert "pass" not in repr(run.call_args.args[0])
+    assert "example.invalid" not in repr(run.call_args.args[0])
+    assert run.call_args.kwargs["input"].startswith(b"ffconcat version 1.0")
 
 
 def test_capture_rtsp_frame_degrades_when_ffmpeg_is_missing():

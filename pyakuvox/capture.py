@@ -25,6 +25,11 @@ def capture_rtsp_frame(
     timeout = max(1, min(timeout, 30))
     if not shutil.which("ffmpeg"):
         return RTSPFrame(ok=False, error="ffmpeg is not installed")
+    # Feed the credential-bearing URL through an anonymous stdin pipe using
+    # ffconcat.  Putting it directly after ``-i`` exposes it in the child
+    # process argument vector and process-command telemetry.
+    escaped_url = rtsp_url.replace("\\", "\\\\").replace("'", "\\'")
+    playlist = f"ffconcat version 1.0\nfile '{escaped_url}'\n".encode()
     args = [
         "ffmpeg",
         "-hide_banner",
@@ -34,8 +39,14 @@ def capture_rtsp_frame(
         "tcp",
         "-timeout",
         str(timeout * 1_000_000),
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-protocol_whitelist",
+        "file,pipe,rtsp,tcp,udp,http,https,tls,crypto",
         "-i",
-        rtsp_url,
+        "pipe:0",
         "-frames:v",
         "1",
         "-f",
@@ -45,6 +56,7 @@ def capture_rtsp_frame(
     try:
         result = subprocess.run(
             args,
+            input=playlist,
             capture_output=True,
             timeout=timeout + 5,
             check=False,

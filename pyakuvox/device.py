@@ -363,6 +363,92 @@ class AkuvoxDevice:
             "verdict": CredentialRotationVerdict.APPLIED_PENDING_RECONNECT,
         }
 
+    async def ensure_rtsp_credentials(
+        self,
+        username: str,
+        password: str,
+        *,
+        apply: bool = False,
+    ) -> SetResult:
+        """Enable RTSP with one credential pair and verify the device read-back.
+
+        This operation changes only the RTSP surface.  It deliberately leaves
+        the management API and ONVIF credentials untouched, so callers may use
+        their already-authenticated management credential as the requested RTSP
+        credential without rotating another service.  Returned data never
+        contains the current or requested password.
+        """
+        username = str(username).strip()
+        if not username:
+            raise ValueError("username is required")
+        if not password:
+            raise ValueError("password is required")
+
+        cfg = await self.get_config(refresh=True)
+        keys = _resolve_access_media_keys(cfg)
+        wants = {
+            "rtsp_enabled": "1",
+            "rtsp_authorization": "1",
+            "rtsp_mjpeg_authorization": "1",
+            "rtsp_auth_mode": "1",
+            "rtsp_username": username,
+            "rtsp_password": password,
+        }
+        before: dict[str, str | bool | None] = {}
+        plan: dict[str, str] = {}
+        raw_plan: dict[str, str] = {}
+        for name, want in wants.items():
+            key = keys[name]
+            have = cfg.get(key)
+            if name == "rtsp_password":
+                before["rtsp_password_set"] = bool(have)
+                if have != want:
+                    plan[name] = "<redacted> -> <redacted>"
+                    raw_plan[key] = want
+            else:
+                before[name] = None if have is None else str(have)
+                if str(have) != want:
+                    plan[name] = f"{have!r} -> {want!r}"
+                    raw_plan[key] = want
+
+        if not raw_plan:
+            return {
+                "before": before,
+                "plan": {},
+                "changed": False,
+                "applied": False,
+                "verdict": SetVerdict.ALREADY_SET,
+                "after": before,
+            }
+        if not apply:
+            return {
+                "before": before,
+                "plan": plan,
+                "changed": True,
+                "applied": False,
+                "verdict": SetVerdict.WOULD_CHANGE,
+            }
+
+        await self.set_config(raw_plan)
+        after_cfg = await self.get_config(refresh=True)
+        matches = all(str(after_cfg.get(keys[name])) == want for name, want in wants.items())
+        after = {
+            name if name != "rtsp_password" else "rtsp_password_set": (
+                bool(after_cfg.get(keys[name]))
+                if name == "rtsp_password"
+                else str(after_cfg.get(keys[name], ""))
+            )
+            for name in wants
+        }
+        return {
+            "before": before,
+            "plan": plan,
+            "changed": True,
+            "applied": True,
+            "verdict": (SetVerdict.SET_VERIFIED if matches else SetVerdict.SET_DID_NOT_STICK),
+            "after": after,
+        }
+
     # ── Account / SIP helpers (firmware-agnostic) ───────────────────
 
     @staticmethod
