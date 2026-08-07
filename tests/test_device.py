@@ -188,6 +188,66 @@ def test_rotate_access_media_credentials_wraps_ambiguous_write_timeout():
         )
 
 
+def test_ensure_rtsp_credentials_changes_only_rtsp_and_verifies_readback():
+    dev = _device(_access_media_config())
+
+    result = _run(
+        dev.ensure_rtsp_credentials("operator", "new-secret", apply=True),
+    )
+
+    assert result["verdict"] is SetVerdict.SET_VERIFIED
+    assert result["applied"] is True
+    assert dev._client.sets == [
+        {
+            "Config.DoorSetting.RTSP.Enable": "1",
+            "Config.DoorSetting.RTSP.Authorization": "1",
+            "Config.DoorSetting.RTSP.MJPEGAuthorization": "1",
+            "Config.DoorSetting.RTSP.AuthenticationType": "1",
+            "Config.DoorSetting.RTSP.Username": "operator",
+            "Config.DoorSetting.RTSP.Password": "new-secret",
+        },
+    ]
+    assert not any("APIFCGI" in key or "Onvif" in key for key in dev._client.sets[0])
+    assert "new-secret" not in repr(result)
+    assert "old-rtsp-password" not in repr(result)
+
+
+def test_ensure_rtsp_credentials_detects_silent_noop():
+    ident = DeviceIdentity(host=DEVICE_HOST, reachable=True, dialect=ApiDialect.DIGEST_API)
+    dev = AkuvoxDevice(ident, NonStickingClient(_access_media_config()))
+
+    result = _run(
+        dev.ensure_rtsp_credentials("operator", "new-secret", apply=True),
+    )
+
+    assert result["verdict"] is SetVerdict.SET_DID_NOT_STICK
+    assert result["applied"] is True
+    assert "new-secret" not in repr(result)
+
+
+def test_ensure_rtsp_credentials_already_set_does_not_write():
+    config = _access_media_config()
+    config.update(
+        {
+            "Config.DoorSetting.RTSP.Enable": "1",
+            "Config.DoorSetting.RTSP.Authorization": "1",
+            "Config.DoorSetting.RTSP.MJPEGAuthorization": "1",
+            "Config.DoorSetting.RTSP.AuthenticationType": "1",
+            "Config.DoorSetting.RTSP.Username": "operator",
+            "Config.DoorSetting.RTSP.Password": "new-secret",
+        },
+    )
+    dev = _device(config)
+
+    result = _run(
+        dev.ensure_rtsp_credentials("operator", "new-secret", apply=True),
+    )
+
+    assert result["verdict"] is SetVerdict.ALREADY_SET
+    assert dev._client.sets == []
+    assert "new-secret" not in repr(result)
+
+
 @pytest.mark.parametrize(
     "error",
     [
