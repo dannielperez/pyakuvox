@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 
 import httpx
@@ -11,6 +12,7 @@ import httpx
 DEFAULT_MJPEG_PORT = 8080
 DEFAULT_MJPEG_SNAPSHOT_PATH = "/picture.jpg"
 MAX_SNAPSHOT_BYTES = 8 * 1024 * 1024
+_DIGEST_HTTP_PHASES = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,16 +66,26 @@ def capture_mjpeg_snapshot(
     if max_bytes < 1024:
         raise ValueError("MJPEG byte limit is invalid")
 
+    # HTTPX deadlines are per network operation, not whole-call deadlines. A
+    # Digest exchange can perform two requests (pool/connect/write/read, then
+    # pool/write/read) before the streamed body read. Divide the caller budget
+    # across that fixed maximum and reserve one final read slice. The monotonic
+    # checks prevent a peer that continually drip-feeds chunks from extending
+    # the call indefinitely.
+    operation_timeout = max(0.001, timeout / _DIGEST_HTTP_PHASES)
+    content_deadline = time.monotonic() + timeout - operation_timeout
     url = httpx.URL(scheme="http", host=normalized_host, port=port, path=path)
     try:
         with (
             httpx.Client(
                 auth=httpx.DigestAuth(username, password),
-                timeout=timeout,
+                timeout=operation_timeout,
                 follow_redirects=False,
             ) as client,
             client.stream("GET", url) as response,
         ):
+            if time.monotonic() >= content_deadline:
+                return _mjpeg_timeout()
             if response.status_code in {401, 403}:
                 return JPEGSnapshot(
                     ok=False,
@@ -88,6 +100,8 @@ def capture_mjpeg_snapshot(
                 )
             image = bytearray()
             for chunk in response.iter_bytes():
+                if time.monotonic() >= content_deadline:
+                    return _mjpeg_timeout()
                 image.extend(chunk)
                 if len(image) > max_bytes:
                     return JPEGSnapshot(
@@ -96,11 +110,7 @@ def capture_mjpeg_snapshot(
                         error_kind="image_too_large",
                     )
     except httpx.TimeoutException:
-        return JPEGSnapshot(
-            ok=False,
-            error="MJPEG snapshot request timed out",
-            error_kind="timeout",
-        )
+        return _mjpeg_timeout()
     except httpx.HTTPError:
         return JPEGSnapshot(
             ok=False,
@@ -116,6 +126,14 @@ def capture_mjpeg_snapshot(
             error_kind="invalid_image",
         )
     return JPEGSnapshot(ok=True, image_bytes=payload)
+
+
+def _mjpeg_timeout() -> JPEGSnapshot:
+    return JPEGSnapshot(
+        ok=False,
+        error="MJPEG snapshot request timed out",
+        error_kind="timeout",
+    )
 
 
 def capture_rtsp_frame(

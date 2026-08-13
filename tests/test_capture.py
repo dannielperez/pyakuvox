@@ -134,3 +134,39 @@ def test_capture_mjpeg_snapshot_maps_timeout_without_credentials():
 
     assert result.error_kind == "timeout"
     assert "secret" not in repr(result)
+
+
+def test_capture_mjpeg_snapshot_bounds_digest_and_drip_feed_to_one_deadline():
+    class DripFeed(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b"\xff\xd8"
+            yield b"jpeg"
+            yield b"\xff\xd9"
+
+    observed_options = {}
+
+    def client(**options):
+        observed_options.update(options)
+        return _HTTPX_CLIENT(
+            transport=_transport(
+                lambda _request: httpx.Response(200, stream=DripFeed()),
+            ),
+            **options,
+        )
+
+    with (
+        patch("pyakuvox.capture.httpx.Client", side_effect=client),
+        patch(
+            "pyakuvox.capture.time.monotonic",
+            side_effect=[100.0, 100.1, 100.4, 100.9],
+        ),
+    ):
+        result = capture_mjpeg_snapshot(
+            "camera.local",
+            "user",
+            "secret",
+            timeout=1,
+        )
+
+    assert result.error_kind == "timeout"
+    assert observed_options["timeout"] == 0.125
