@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 __version__ = "0.2.0"
 
-from pyakuvox.capture import RTSPFrame, capture_rtsp_frame
+from pyakuvox.capture import JPEGSnapshot, RTSPFrame, capture_mjpeg_snapshot, capture_rtsp_frame
 from pyakuvox.exceptions import (
     AkuvoxError,
     AmbiguousMutationError,
@@ -105,6 +105,7 @@ __all__ = [
     "DeviceInfo",
     "DeviceStatus",
     "FlipResult",
+    "JPEGSnapshot",
     "LocalAuthType",
     "LocalClient",
     "LocalSettings",
@@ -120,6 +121,7 @@ __all__ = [
     "UnsupportedFeatureError",
     "build_config_set_payload",
     "build_rtsp_url",
+    "capture_mjpeg_snapshot",
     "capture_rtsp_frame",
     "dialect_for_model",
     "enable_api",
