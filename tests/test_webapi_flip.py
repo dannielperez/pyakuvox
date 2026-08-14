@@ -150,6 +150,35 @@ def test_verify_digest_accepts_200_json_object():
     with patch.object(flip_mod.httpx, "AsyncClient", return_value=client):
         assert asyncio.run(verify_digest("1.2.3.4", "admin", "pw"))
 
+
+class TaskAbortError(Exception):
+    """Stand-in for caller control flow such as a Celery soft time limit."""
+
+
+def test_enable_api_does_not_swallow_caller_control_flow():
+    ident = DeviceIdentity(
+        host="1.2.3.4",
+        reachable=True,
+        dialect=ApiDialect.FCGI_WEB,
+        model="X916",
+    )
+    abort = TaskAbortError("stop now")
+    with (
+        patch.object(flip_mod, "verify_digest", AsyncMock(return_value=False)),
+        patch.object(flip_mod, "identify", AsyncMock(return_value=ident)),
+        patch.object(flip_mod, "_flip_fcgi", AsyncMock(side_effect=abort)),
+        pytest.raises(TaskAbortError, match="stop now"),
+    ):
+        asyncio.run(
+            enable_api_digest(
+                "1.2.3.4",
+                web_user="a",
+                web_pass="b",
+                api_user="admin",
+                api_pass="pw",
+            )
+        )
+
 @pytest.mark.asyncio
 async def test_enable_api_digest_short_circuits_when_already_set():
     with patch.object(flip_mod, "verify_digest", AsyncMock(return_value=True)):
