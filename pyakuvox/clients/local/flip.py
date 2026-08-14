@@ -39,6 +39,7 @@ from pyakuvox.clients.local.webui import (
     HttpApiConfig,
     WebUIClient,
 )
+from pyakuvox.exceptions import AkuvoxError
 from pyakuvox.identify import ApiDialect, dialect_for_model, identify
 
 logger = structlog.get_logger(__name__)
@@ -76,7 +77,7 @@ async def verify_digest(
     *,
     timeout: float = 8.0,
 ) -> bool:
-    """True if ``GET /api/system/info`` answers ``200`` to digest auth.
+    """True if Digest returns a non-empty JSON object from system info.
 
     Tries HTTPS (S5xx) then HTTP (X916/R29C). This is the ground-truth check
     that the API is actually usable headlessly — not just that a write returned
@@ -90,7 +91,16 @@ async def verify_digest(
                 r = await c.get(f"{scheme}://{host}/api/system/info", auth=auth)
             except (httpx.HTTPError, ssl.SSLError, OSError):
                 continue
-            if r.status_code == 200:
+            if r.status_code != 200:
+                continue
+            # Some locked/misconfigured firmware answers ``200`` with an empty
+            # body. LocalClient requires a JSON object, so status alone is not
+            # proof that the Digest API is usable.
+            try:
+                payload = r.json()
+            except ValueError:
+                continue
+            if isinstance(payload, dict) and payload:
                 return True
     return False
 
@@ -121,7 +131,7 @@ async def _flip_fcgi(
             async with WebUIClient(host, timeout=timeout, password_encoding=enc) as ui:
                 await ui.login(web_user, web_pass)
                 cfg = await ui.enable_api_access(api_user, api_pass, auth_mode)
-        except Exception as exc:
+        except AkuvoxError as exc:
             logger.debug("fcgi_flip_attempt_failed", host=host, encoding=enc.value, error=str(exc))
             continue
         if await _verify(host, api_user, api_pass, auth_mode, cfg):
@@ -188,7 +198,7 @@ async def enable_api(
         try:
             used = await path(host, web_user, web_pass, api_user, api_pass,
                               auth_mode, model or "", timeout)
-        except Exception as exc:
+        except AkuvoxError as exc:
             last_err = f"{type(exc).__name__}: {exc}"
             logger.debug("flip_path_error", host=host, path=path.__name__, error=last_err)
             continue

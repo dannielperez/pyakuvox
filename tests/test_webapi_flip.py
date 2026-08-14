@@ -4,6 +4,7 @@ flow, and the enable_api_digest orchestrator. All httpx is mocked — no network
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 from unittest.mock import AsyncMock, patch
@@ -18,7 +19,12 @@ from pyakuvox.clients.local.encoding import (
     encode_config_password_webapi,
     post_encode,
 )
-from pyakuvox.clients.local.flip import FlipResult, enable_api, enable_api_digest
+from pyakuvox.clients.local.flip import (
+    FlipResult,
+    enable_api,
+    enable_api_digest,
+    verify_digest,
+)
 from pyakuvox.clients.local.webapi import WebApiClient
 from pyakuvox.clients.local.webui import FirmwareAuthMode
 from pyakuvox.identify import ApiDialect, DeviceIdentity
@@ -121,6 +127,57 @@ async def test_webapi_enable_api_access_sends_base64_password():
 
 
 # ── Orchestrator dispatch (generic enable_api + Digest wrapper) ──────────
+
+@pytest.mark.parametrize("text", ["", "not-json"])
+def test_verify_digest_rejects_200_without_json_object(text):
+    response = _resp(status=200, text=text)
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.__aexit__.return_value = None
+    client.get = AsyncMock(return_value=response)
+
+    with patch.object(flip_mod.httpx, "AsyncClient", return_value=client):
+        assert not asyncio.run(verify_digest("1.2.3.4", "admin", "pw"))
+
+
+def test_verify_digest_accepts_200_json_object():
+    response = _resp(status=200, body={"data": {"Status": {"Model": "S535"}}})
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.__aexit__.return_value = None
+    client.get = AsyncMock(return_value=response)
+
+    with patch.object(flip_mod.httpx, "AsyncClient", return_value=client):
+        assert asyncio.run(verify_digest("1.2.3.4", "admin", "pw"))
+
+
+class TaskAbortError(Exception):
+    """Stand-in for caller control flow such as a Celery soft time limit."""
+
+
+def test_enable_api_does_not_swallow_caller_control_flow():
+    ident = DeviceIdentity(
+        host="1.2.3.4",
+        reachable=True,
+        dialect=ApiDialect.FCGI_WEB,
+        model="X916",
+    )
+    abort = TaskAbortError("stop now")
+    with (
+        patch.object(flip_mod, "verify_digest", AsyncMock(return_value=False)),
+        patch.object(flip_mod, "identify", AsyncMock(return_value=ident)),
+        patch.object(flip_mod, "_flip_fcgi", AsyncMock(side_effect=abort)),
+        pytest.raises(TaskAbortError, match="stop now"),
+    ):
+        asyncio.run(
+            enable_api_digest(
+                "1.2.3.4",
+                web_user="a",
+                web_pass="b",
+                api_user="admin",
+                api_pass="pw",
+            )
+        )
 
 @pytest.mark.asyncio
 async def test_enable_api_digest_short_circuits_when_already_set():
