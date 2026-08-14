@@ -90,7 +90,16 @@ async def verify_digest(
                 r = await c.get(f"{scheme}://{host}/api/system/info", auth=auth)
             except (httpx.HTTPError, ssl.SSLError, OSError):
                 continue
-            if r.status_code == 200:
+            if r.status_code != 200:
+                continue
+            # Some locked/misconfigured firmware answers ``200`` with an empty
+            # body. LocalClient requires a JSON object, so status alone is not
+            # proof that the Digest API is usable.
+            try:
+                payload = r.json()
+            except ValueError:
+                continue
+            if isinstance(payload, dict) and payload:
                 return True
     return False
 
