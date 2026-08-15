@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added — secret-free security evidence
+- `AkuvoxDevice.security_snapshot(...)` returns a typed credential-risk verdict
+  and complete user-account summaries without PIN, card, or password values.
+- Generic weak-password policy is caller-injected; the wrapper owns only the
+  Akuvox shipped-default credential fact.
+- User rows missing both device identifiers receive a stable hash derived only
+  from non-secret account metadata.
+
 ### Added — coordinated access/media credential rotation
 - `AkuvoxDevice.rotate_access_media_credentials(...)` writes HTTP API Digest,
   RTSP Digest authorization, RTSP/MJPEG credentials, and ONVIF credentials in

@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from pyakuvox.capture import JPEGSnapshot, RTSPFrame, capture_mjpeg_snapshot, capture_rtsp_frame
 from pyakuvox.exceptions import (
@@ -35,6 +35,7 @@ from pyakuvox.network import (
     render_url,
 )
 from pyakuvox.rtsp import RTSPStreamConfig, build_rtsp_url
+from pyakuvox.security import CredentialRisk, SecuritySnapshot, UserAccountSummary
 
 if TYPE_CHECKING:
     from pyakuvox.clients.local.client import LocalClient
@@ -97,6 +98,7 @@ __all__ = [
     "AuthenticationError",
     "ConfigKeyMap",
     "ConnectionError",
+    "CredentialRisk",
     "CredentialRotationResult",
     "CredentialRotationVerdict",
     "CustomPostProfile",
@@ -114,11 +116,13 @@ __all__ = [
     "RTSPFrame",
     "RTSPStreamConfig",
     "RelayState",
+    "SecuritySnapshot",
     "SetResult",
     "SetVerdict",
     "TimeoutError",
     "UnsupportedDialectError",
     "UnsupportedFeatureError",
+    "UserAccountSummary",
     "build_config_set_payload",
     "build_rtsp_url",
     "capture_mjpeg_snapshot",

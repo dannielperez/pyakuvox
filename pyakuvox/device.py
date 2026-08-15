@@ -38,7 +38,11 @@ from pyakuvox.exceptions import AmbiguousMutationError, DeviceError, Unsupported
 from pyakuvox.identify import ApiDialect, DeviceIdentity, identify
 
 if TYPE_CHECKING:
+    from collections.abc import Collection
+
     from pyakuvox.models.device import DeviceInfo
+    from pyakuvox.models.users import UserCode
+    from pyakuvox.security import SecuritySnapshot
 
 logger = structlog.get_logger(__name__)
 
@@ -60,6 +64,8 @@ class _DeviceClient(Protocol):
     async def set_config(self, settings: dict[str, str]) -> None: ...
 
     async def get_device_info(self) -> DeviceInfo: ...
+
+    async def list_all_users(self) -> list[UserCode]: ...
 
     async def reboot(self) -> bool: ...
 
@@ -279,6 +285,28 @@ class AkuvoxDevice:
 
     async def info(self) -> DeviceInfo:
         return await self._ensure_client().get_device_info()
+
+    async def security_snapshot(
+        self,
+        username: str,
+        password: str,
+        *,
+        weak_passwords: Collection[str] = (),
+        treat_username_as_weak: bool = False,
+    ) -> SecuritySnapshot:
+        """Return secret-free evidence with optional caller-owned weak policy."""
+        from pyakuvox.security import SecuritySnapshot, assess_credential, summarize_user
+
+        users = await self._ensure_client().list_all_users()
+        return SecuritySnapshot(
+            credential_risk=assess_credential(
+                username,
+                password,
+                weak_passwords=weak_passwords,
+                treat_username_as_weak=treat_username_as_weak,
+            ),
+            users=tuple(summarize_user(user) for user in users),
+        )
 
     async def reboot(self) -> bool:
         return await self._ensure_client().reboot()
