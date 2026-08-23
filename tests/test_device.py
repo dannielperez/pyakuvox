@@ -70,6 +70,18 @@ class FailedWriteClient(FakeClient):
         raise self._error
 
 
+class SlowPreflightClient(FakeClient):
+    async def get_config(self):
+        await asyncio.sleep(0.2)
+        return await super().get_config()
+
+
+class SlowWriteClient(FakeClient):
+    async def set_config(self, settings):
+        self.sets.append(settings)
+        await asyncio.sleep(0.2)
+
+
 def _device(config: dict, dialect=ApiDialect.DIGEST_API) -> AkuvoxDevice:
     ident = DeviceIdentity(host=DEVICE_HOST, reachable=True, dialect=dialect)
     return AkuvoxDevice(ident, FakeClient(config))
@@ -186,6 +198,42 @@ def test_rotate_access_media_credentials_wraps_ambiguous_write_timeout():
                 apply=True,
             ),
         )
+
+
+def test_rotate_access_media_credentials_whole_budget_times_out_before_write():
+    ident = DeviceIdentity(host=DEVICE_HOST, reachable=True, dialect=ApiDialect.DIGEST_API)
+    client = SlowPreflightClient(_access_media_config())
+    dev = AkuvoxDevice(ident, client)
+
+    with pytest.raises(AkuvoxTimeoutError, match="before any write"):
+        _run(
+            dev.rotate_access_media_credentials(
+                "operator",
+                "new-secret",
+                apply=True,
+                total_timeout=0.01,
+            ),
+        )
+
+    assert client.sets == []
+
+
+def test_rotate_access_media_credentials_whole_budget_is_ambiguous_after_dispatch():
+    ident = DeviceIdentity(host=DEVICE_HOST, reachable=True, dialect=ApiDialect.DIGEST_API)
+    client = SlowWriteClient(_access_media_config())
+    dev = AkuvoxDevice(ident, client)
+
+    with pytest.raises(AmbiguousMutationError):
+        _run(
+            dev.rotate_access_media_credentials(
+                "operator",
+                "new-secret",
+                apply=True,
+                total_timeout=0.05,
+            ),
+        )
+
+    assert len(client.sets) == 1
 
 
 def test_ensure_rtsp_credentials_changes_only_rtsp_and_verifies_readback():

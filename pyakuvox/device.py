@@ -28,6 +28,7 @@ once an E18C's HTTP API is flipped to Digest it connects normally.
 
 from __future__ import annotations
 
+import asyncio
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, NotRequired, Protocol, TypedDict
 
@@ -35,6 +36,7 @@ import structlog
 
 from pyakuvox.config import LocalAuthType, LocalSettings
 from pyakuvox.exceptions import AmbiguousMutationError, DeviceError, UnsupportedDialectError
+from pyakuvox.exceptions import TimeoutError as AkuvoxTimeoutError
 from pyakuvox.identify import ApiDialect, DeviceIdentity, identify
 
 if TYPE_CHECKING:
@@ -317,6 +319,7 @@ class AkuvoxDevice:
         password: str,
         *,
         apply: bool = False,
+        total_timeout: float | None = None,
     ) -> CredentialRotationResult:
         """Keep management API, RTSP, and ONVIF on one credential pair.
 
@@ -337,7 +340,21 @@ class AkuvoxDevice:
         if not password:
             raise ValueError("password is required")
 
-        cfg = await self.get_config(refresh=True)
+        deadline: float | None = None
+        if total_timeout is not None:
+            total_timeout = float(total_timeout)
+            if total_timeout <= 0 or total_timeout > 60:
+                raise ValueError("credential rotation total timeout is invalid")
+            deadline = asyncio.get_running_loop().time() + total_timeout
+            try:
+                async with asyncio.timeout(total_timeout):
+                    cfg = await self.get_config(refresh=True)
+            except TimeoutError as exc:
+                raise AkuvoxTimeoutError(
+                    "Credential configuration preflight timed out before any write.",
+                ) from exc
+        else:
+            cfg = await self.get_config(refresh=True)
         keys = _resolve_access_media_keys(cfg)
         wants = {
             "api_enabled": "1",
@@ -378,8 +395,19 @@ class AkuvoxDevice:
                 "verdict": CredentialRotationVerdict.WOULD_CHANGE,
             }
 
+        remaining: float | None = None
+        if deadline is not None:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise AkuvoxTimeoutError(
+                    "Credential configuration budget expired before any write.",
+                )
         try:
-            await self.set_config(raw_plan)
+            if remaining is None:
+                await self.set_config(raw_plan)
+            else:
+                async with asyncio.timeout(remaining):
+                    await self.set_config(raw_plan)
         except Exception as exc:
             raise AmbiguousMutationError(
                 "Credential config write started but was not confirmed.",
