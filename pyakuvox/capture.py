@@ -226,10 +226,25 @@ def _mjpeg_timeout(path: str = "") -> JPEGSnapshot:
 def capture_rtsp_frame(
     rtsp_url: str,
     *,
-    timeout: int = 5,
+    timeout: float = 5,
+    total_timeout: float | None = None,
 ) -> RTSPFrame:
-    """Capture one JPEG frame with ffmpeg, never logging the URL or credentials."""
-    timeout = max(1, min(timeout, 30))
+    """Capture one JPEG frame with ffmpeg, never logging the URL or credentials.
+
+    ``timeout`` bounds ffmpeg's RTSP network wait. ``total_timeout`` optionally
+    caps the entire child-process call, including ffmpeg startup and cleanup, so
+    an orchestration layer can fit the capture inside its own monotonic budget.
+    Omitting it preserves the historical ``timeout + 5`` process allowance.
+    """
+    timeout = max(0.001, min(float(timeout), 30.0))
+    if total_timeout is None:
+        process_timeout = timeout + 5.0
+    else:
+        total_timeout = float(total_timeout)
+        if total_timeout <= 0 or total_timeout > 60:
+            raise ValueError("RTSP total timeout is invalid")
+        process_timeout = total_timeout
+        timeout = min(timeout, total_timeout)
     if not shutil.which("ffmpeg"):
         return RTSPFrame(ok=False, error="ffmpeg is not installed")
     # Feed the credential-bearing URL through an anonymous stdin pipe using
@@ -245,7 +260,7 @@ def capture_rtsp_frame(
         "-rtsp_transport",
         "tcp",
         "-timeout",
-        str(timeout * 1_000_000),
+        str(int(timeout * 1_000_000)),
         "-f",
         "concat",
         "-safe",
@@ -265,7 +280,7 @@ def capture_rtsp_frame(
             args,
             input=playlist,
             capture_output=True,
-            timeout=timeout + 5,
+            timeout=process_timeout,
             check=False,
         )
     except subprocess.TimeoutExpired:

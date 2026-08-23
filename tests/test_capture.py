@@ -47,6 +47,33 @@ def test_capture_rtsp_frame_degrades_when_ffmpeg_is_missing():
     assert result.error == "ffmpeg is not installed"
 
 
+def test_capture_rtsp_frame_honors_a_whole_call_budget():
+    completed = type("Completed", (), {"returncode": 0, "stdout": b"jpeg"})()
+    with (
+        patch("pyakuvox.capture.shutil.which", return_value="/usr/bin/ffmpeg"),
+        patch("pyakuvox.capture.subprocess.run", return_value=completed) as run,
+    ):
+        result = capture_rtsp_frame(
+            "rtsp://user:pass@example.invalid/live/ch00_0",
+            timeout=5,
+            total_timeout=2.5,
+        )
+
+    assert result.ok is True
+    assert run.call_args.kwargs["timeout"] == 2.5
+    args = run.call_args.args[0]
+    assert args[args.index("-timeout") + 1] == "2500000"
+
+
+@pytest.mark.parametrize("total_timeout", [0, -1, 61])
+def test_capture_rtsp_frame_rejects_an_invalid_whole_call_budget(total_timeout):
+    with pytest.raises(ValueError, match="total timeout is invalid"):
+        capture_rtsp_frame(
+            "rtsp://example.invalid/live/ch00_0",
+            total_timeout=total_timeout,
+        )
+
+
 def _transport(handler):
     return httpx.MockTransport(handler)
 
