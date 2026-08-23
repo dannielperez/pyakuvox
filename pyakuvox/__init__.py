@@ -4,7 +4,13 @@ from typing import TYPE_CHECKING
 
 __version__ = "0.3.0"
 
-from pyakuvox.capture import JPEGSnapshot, RTSPFrame, capture_mjpeg_snapshot, capture_rtsp_frame
+from pyakuvox.capture import (
+    DOCUMENTED_MJPEG_SNAPSHOT_PATHS,
+    JPEGSnapshot,
+    RTSPFrame,
+    capture_mjpeg_snapshot,
+    capture_rtsp_frame,
+)
 from pyakuvox.exceptions import (
     AkuvoxError,
     AmbiguousMutationError,
@@ -90,6 +96,7 @@ else:
         RelayState = None
 
 __all__ = [
+    "DOCUMENTED_MJPEG_SNAPSHOT_PATHS",
     "AkuvoxDevice",
     "AkuvoxError",
     "AmbiguousMutationError",
