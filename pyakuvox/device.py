@@ -28,6 +28,7 @@ once an E18C's HTTP API is flipped to Digest it connects normally.
 
 from __future__ import annotations
 
+import asyncio
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, NotRequired, Protocol, TypedDict
 
@@ -35,10 +36,15 @@ import structlog
 
 from pyakuvox.config import LocalAuthType, LocalSettings
 from pyakuvox.exceptions import AmbiguousMutationError, DeviceError, UnsupportedDialectError
+from pyakuvox.exceptions import TimeoutError as AkuvoxTimeoutError
 from pyakuvox.identify import ApiDialect, DeviceIdentity, identify
 
 if TYPE_CHECKING:
+    from collections.abc import Collection
+
     from pyakuvox.models.device import DeviceInfo
+    from pyakuvox.models.users import UserCode
+    from pyakuvox.security import SecuritySnapshot
 
 logger = structlog.get_logger(__name__)
 
@@ -50,6 +56,16 @@ _SIP_TRANSPORT_CODES = {
     "tls": "2",
     "dns-naptr": "3",
 }
+SIP_PASSWORD_MAX_LENGTH = 63
+SIP_PASSWORD_FORBIDDEN_CHARACTERS = frozenset({"&", "%", "'", "="})
+
+
+def validate_sip_password(password: str) -> None:
+    """Validate a SIP password against Akuvox account input constraints."""
+    if len(password) > SIP_PASSWORD_MAX_LENGTH:
+        raise ValueError(f"Akuvox SIP passwords cannot exceed {SIP_PASSWORD_MAX_LENGTH} characters")
+    if SIP_PASSWORD_FORBIDDEN_CHARACTERS.intersection(password):
+        raise ValueError("Akuvox SIP passwords contain unsupported characters")
 
 
 class _DeviceClient(Protocol):
@@ -60,6 +76,8 @@ class _DeviceClient(Protocol):
     async def set_config(self, settings: dict[str, str]) -> None: ...
 
     async def get_device_info(self) -> DeviceInfo: ...
+
+    async def list_all_users(self) -> list[UserCode]: ...
 
     async def reboot(self) -> bool: ...
 
@@ -280,6 +298,28 @@ class AkuvoxDevice:
     async def info(self) -> DeviceInfo:
         return await self._ensure_client().get_device_info()
 
+    async def security_snapshot(
+        self,
+        username: str,
+        password: str,
+        *,
+        weak_passwords: Collection[str] = (),
+        treat_username_as_weak: bool = False,
+    ) -> SecuritySnapshot:
+        """Return secret-free evidence with optional caller-owned weak policy."""
+        from pyakuvox.security import SecuritySnapshot, assess_credential, summarize_user
+
+        users = await self._ensure_client().list_all_users()
+        return SecuritySnapshot(
+            credential_risk=assess_credential(
+                username,
+                password,
+                weak_passwords=weak_passwords,
+                treat_username_as_weak=treat_username_as_weak,
+            ),
+            users=tuple(summarize_user(user) for user in users),
+        )
+
     async def reboot(self) -> bool:
         return await self._ensure_client().reboot()
 
@@ -289,6 +329,7 @@ class AkuvoxDevice:
         password: str,
         *,
         apply: bool = False,
+        total_timeout: float | None = None,
     ) -> CredentialRotationResult:
         """Keep management API, RTSP, and ONVIF on one credential pair.
 
@@ -309,7 +350,21 @@ class AkuvoxDevice:
         if not password:
             raise ValueError("password is required")
 
-        cfg = await self.get_config(refresh=True)
+        deadline: float | None = None
+        if total_timeout is not None:
+            total_timeout = float(total_timeout)
+            if total_timeout <= 0 or total_timeout > 60:
+                raise ValueError("credential rotation total timeout is invalid")
+            deadline = asyncio.get_running_loop().time() + total_timeout
+            try:
+                async with asyncio.timeout(total_timeout):
+                    cfg = await self.get_config(refresh=True)
+            except TimeoutError as exc:
+                raise AkuvoxTimeoutError(
+                    "Credential configuration preflight timed out before any write.",
+                ) from exc
+        else:
+            cfg = await self.get_config(refresh=True)
         keys = _resolve_access_media_keys(cfg)
         wants = {
             "api_enabled": "1",
@@ -350,8 +405,19 @@ class AkuvoxDevice:
                 "verdict": CredentialRotationVerdict.WOULD_CHANGE,
             }
 
+        remaining: float | None = None
+        if deadline is not None:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise AkuvoxTimeoutError(
+                    "Credential configuration budget expired before any write.",
+                )
         try:
-            await self.set_config(raw_plan)
+            if remaining is None:
+                await self.set_config(raw_plan)
+            else:
+                async with asyncio.timeout(remaining):
+                    await self.set_config(raw_plan)
         except Exception as exc:
             raise AmbiguousMutationError(
                 "Credential config write started but was not confirmed.",
@@ -543,6 +609,7 @@ class AkuvoxDevice:
         persisted. E18C single-account writes remain unsupported because that
         dialect requires the keyed ``/web`` edit envelope.
         """
+        validate_sip_password(password)
         transport_name = transport.strip().lower()
         try:
             transport_code = _SIP_TRANSPORT_CODES[transport_name]
