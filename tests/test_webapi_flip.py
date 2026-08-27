@@ -35,12 +35,16 @@ def _resp(status: int = 200, body: dict | None = None, text: str = "") -> httpx.
         content, ctype = json.dumps(body).encode(), "application/json"
     else:
         content, ctype = text.encode(), "text/plain"
-    return httpx.Response(status_code=status, content=content,
-                          headers={"content-type": ctype},
-                          request=httpx.Request("POST", "http://test/"))
+    return httpx.Response(
+        status_code=status,
+        content=content,
+        headers={"content-type": ctype},
+        request=httpx.Request("POST", "http://test/"),
+    )
 
 
 # ── Encodings (pure functions — the load-bearing per-dialect difference) ──
+
 
 def test_x916_encoding_is_postencode_of_base64():
     pw = "S3cr3t/&pass"
@@ -67,20 +71,31 @@ def test_the_three_encodings_are_distinct():
     # from the plain-base64 S535 form (they coincide only when base64 has no
     # post-encodable chars — a real property, not a bug).
     pw = "secret/key"
-    assert len({encode_config_password(pw), encode_config_password_legacy(pw),
-                encode_config_password_webapi(pw)}) == 3
+    assert (
+        len(
+            {
+                encode_config_password(pw),
+                encode_config_password_legacy(pw),
+                encode_config_password_webapi(pw),
+            }
+        )
+        == 3
+    )
 
 
 # ── WebApiClient SPA flow ────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_webapi_login_success_sets_token():
     mock = AsyncMock()
     mock.cookies = httpx.Cookies()  # real jar so cookies.set() works (not a coro)
-    mock.post = AsyncMock(side_effect=[
-        _resp(body={"retcode": 0, "data": {"encrypt": "NONCE"}}),
-        _resp(body={"retcode": 0, "data": {"token": "TKN"}}),
-    ])
+    mock.post = AsyncMock(
+        side_effect=[
+            _resp(body={"retcode": 0, "data": {"encrypt": "NONCE"}}),
+            _resp(body={"retcode": 0, "data": {"token": "TKN"}}),
+        ]
+    )
     async with WebApiClient("1.2.3.4") as web:
         web._client = mock
         tok = await web.login("admin", "webpass")
@@ -94,11 +109,14 @@ async def test_webapi_login_success_sets_token():
 @pytest.mark.asyncio
 async def test_webapi_login_backs_off_on_throttle_then_raises():
     from pyakuvox.exceptions import AuthenticationError
+
     async with WebApiClient("1.2.3.4") as web:
         web._client = AsyncMock()
         web._client.post = AsyncMock(return_value=_resp(status=401, text="<?xml ?>"))
-        with patch("asyncio.sleep", AsyncMock()) as slept, \
-             pytest.raises(AuthenticationError, match="throttled"):  # no real waiting
+        with (
+            patch("asyncio.sleep", AsyncMock()) as slept,
+            pytest.raises(AuthenticationError, match="throttled"),
+        ):  # no real waiting
             await web.login("admin", "webpass")
     # 4 attempts → 3 backoff sleeps
     assert slept.await_count == 3
@@ -107,15 +125,22 @@ async def test_webapi_login_backs_off_on_throttle_then_raises():
 @pytest.mark.asyncio
 async def test_webapi_enable_api_access_sends_base64_password():
     mock = AsyncMock()
-    mock.post = AsyncMock(side_effect=[
-        _resp(body={"retcode": 0}),                       # config/set
-        _resp(body={"retcode": 0, "data": {              # get_http_api_config re-read
-            "Config.DoorSetting.APIFCGI.Enable": "1",
-            "Config.DoorSetting.APIFCGI.AuthMode": "4",
-            "Config.DoorSetting.APIFCGI.UserName": "admin",
-            "Config.DoorSetting.APIFCGI.Password": "x",
-        }}),
-    ])
+    mock.post = AsyncMock(
+        side_effect=[
+            _resp(body={"retcode": 0}),  # config/set
+            _resp(
+                body={
+                    "retcode": 0,
+                    "data": {  # get_http_api_config re-read
+                        "Config.DoorSetting.APIFCGI.Enable": "1",
+                        "Config.DoorSetting.APIFCGI.AuthMode": "4",
+                        "Config.DoorSetting.APIFCGI.UserName": "admin",
+                        "Config.DoorSetting.APIFCGI.Password": "x",
+                    },
+                }
+            ),
+        ]
+    )
     async with WebApiClient("1.2.3.4") as web:
         web._token = "TKN"
         web._client = mock
@@ -127,6 +152,7 @@ async def test_webapi_enable_api_access_sends_base64_password():
 
 
 # ── Orchestrator dispatch (generic enable_api + Digest wrapper) ──────────
+
 
 @pytest.mark.parametrize("text", ["", "not-json"])
 def test_verify_digest_rejects_200_without_json_object(text):
@@ -151,6 +177,28 @@ def test_verify_digest_accepts_200_json_object():
         assert asyncio.run(verify_digest("1.2.3.4", "admin", "pw"))
 
 
+@pytest.mark.asyncio
+async def test_enable_api_reports_verified_https_endpoint():
+    endpoint = flip_mod._DigestEndpoint(scheme="https", port=443)
+    with patch.object(
+        flip_mod,
+        "_probe_digest_endpoint",
+        AsyncMock(return_value=endpoint),
+    ):
+        result = await enable_api_digest(
+            "1.2.3.4",
+            web_user="admin",
+            web_pass="pw",
+            api_user="admin",
+            api_pass="pw",
+        )
+
+    assert result.ok is True
+    assert result.verdict == "already-set"
+    assert result.verified_scheme == "https"
+    assert result.verified_port == 443
+
+
 class TaskAbortError(Exception):
     """Stand-in for caller control flow such as a Celery soft time limit."""
 
@@ -164,7 +212,7 @@ def test_enable_api_does_not_swallow_caller_control_flow():
     )
     abort = TaskAbortError("stop now")
     with (
-        patch.object(flip_mod, "verify_digest", AsyncMock(return_value=False)),
+        patch.object(flip_mod, "_probe_digest_endpoint", AsyncMock(return_value=None)),
         patch.object(flip_mod, "identify", AsyncMock(return_value=ident)),
         patch.object(flip_mod, "_flip_fcgi", AsyncMock(side_effect=abort)),
         pytest.raises(TaskAbortError, match="stop now"),
@@ -179,27 +227,43 @@ def test_enable_api_does_not_swallow_caller_control_flow():
             )
         )
 
+
 @pytest.mark.asyncio
 async def test_enable_api_digest_short_circuits_when_already_set():
-    with patch.object(flip_mod, "verify_digest", AsyncMock(return_value=True)):
-        res = await enable_api_digest("1.2.3.4", web_user="a", web_pass="b",
-                                      api_user="admin", api_pass="pw")
+    endpoint = flip_mod._DigestEndpoint(scheme="http", port=80)
+    with patch.object(
+        flip_mod,
+        "_probe_digest_endpoint",
+        AsyncMock(return_value=endpoint),
+    ):
+        res = await enable_api_digest(
+            "1.2.3.4", web_user="a", web_pass="b", api_user="admin", api_pass="pw"
+        )
     assert res.ok and res.verdict == "already-set"
     assert res.auth_mode is FirmwareAuthMode.DIGEST  # wrapper pins Digest
+    assert res.verified_scheme == "http" and res.verified_port == 80
 
 
 @pytest.mark.asyncio
 async def test_enable_api_dispatches_webapi_for_spa():
     ident = DeviceIdentity(host="1.2.3.4", reachable=True, dialect=ApiDialect.WEB_API, model="S535")
-    # verify_digest: False first (not yet), True after the SPA flip
-    verify = AsyncMock(side_effect=[False, True])
-    with patch.object(flip_mod, "verify_digest", verify), \
-         patch.object(flip_mod, "identify", AsyncMock(return_value=ident)), \
-         patch.object(flip_mod, "_flip_webapi", AsyncMock(return_value="web_api")) as spa, \
-         patch.object(flip_mod, "_flip_fcgi", AsyncMock(return_value="")) as fcgi:
-        res = await enable_api("1.2.3.4", web_user="a", web_pass="b",
-                               api_user="admin", api_pass="pw")
+    endpoint = flip_mod._DigestEndpoint(scheme="https", port=443)
+    probe = AsyncMock(side_effect=[None, endpoint])
+    with (
+        patch.object(flip_mod, "_probe_digest_endpoint", probe),
+        patch.object(flip_mod, "identify", AsyncMock(return_value=ident)),
+        patch.object(
+            flip_mod,
+            "_flip_webapi",
+            AsyncMock(return_value=("web_api", endpoint)),
+        ) as spa,
+        patch.object(flip_mod, "_flip_fcgi", AsyncMock(return_value=("", None))) as fcgi,
+    ):
+        res = await enable_api(
+            "1.2.3.4", web_user="a", web_pass="b", api_user="admin", api_pass="pw"
+        )
     assert res.ok and res.verdict == "applied" and res.encoding_used == "web_api"
+    assert res.verified_scheme == "https" and res.verified_port == 443
     spa.assert_awaited_once()
     fcgi.assert_not_awaited()
 
@@ -208,52 +272,71 @@ async def test_enable_api_dispatches_webapi_for_spa():
 async def test_enable_api_non_digest_mode_skips_digest_shortcircuit():
     """A non-Digest target must NOT short-circuit on verify_digest — it should
     identify + apply and confirm via the mode read back (mocked _flip)."""
-    ident = DeviceIdentity(host="1.2.3.4", reachable=True,
-                           dialect=ApiDialect.FCGI_WEB, model="X916")
-    verify = AsyncMock(return_value=True)  # would short-circuit IF consulted
-    with patch.object(flip_mod, "verify_digest", verify), \
-         patch.object(flip_mod, "identify", AsyncMock(return_value=ident)) as ident_mock, \
-         patch.object(flip_mod, "_flip_fcgi", AsyncMock(return_value="x916")) as fcgi:
-        res = await enable_api("1.2.3.4", web_user="a", web_pass="b",
-                               api_user="admin", api_pass="pw",
-                               auth_mode=FirmwareAuthMode.WHITELIST)
+    ident = DeviceIdentity(
+        host="1.2.3.4", reachable=True, dialect=ApiDialect.FCGI_WEB, model="X916"
+    )
+    probe = AsyncMock(return_value=flip_mod._DigestEndpoint(scheme="https", port=443))
+    with (
+        patch.object(flip_mod, "_probe_digest_endpoint", probe),
+        patch.object(flip_mod, "identify", AsyncMock(return_value=ident)) as ident_mock,
+        patch.object(flip_mod, "_flip_fcgi", AsyncMock(return_value=("x916", None))) as fcgi,
+    ):
+        res = await enable_api(
+            "1.2.3.4",
+            web_user="a",
+            web_pass="b",
+            api_user="admin",
+            api_pass="pw",
+            auth_mode=FirmwareAuthMode.WHITELIST,
+        )
     assert res.ok and res.verdict == "applied"
     assert res.auth_mode is FirmwareAuthMode.WHITELIST
-    ident_mock.assert_awaited_once()   # did NOT short-circuit
-    verify.assert_not_awaited()        # digest check irrelevant for WhiteList
+    ident_mock.assert_awaited_once()  # did NOT short-circuit
+    probe.assert_not_awaited()  # digest check irrelevant for WhiteList
     fcgi.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_enable_api_unsupported_dialect():
-    ident = DeviceIdentity(host="1.2.3.4", reachable=True,
-                           dialect=ApiDialect.LEGACY_WEB, model="E18C")
-    with patch.object(flip_mod, "verify_digest", AsyncMock(return_value=False)), \
-         patch.object(flip_mod, "identify", AsyncMock(return_value=ident)):
-        res = await enable_api("1.2.3.4", web_user="a", web_pass="b",
-                               api_user="admin", api_pass="pw")
+    ident = DeviceIdentity(
+        host="1.2.3.4", reachable=True, dialect=ApiDialect.LEGACY_WEB, model="E18C"
+    )
+    with (
+        patch.object(flip_mod, "_probe_digest_endpoint", AsyncMock(return_value=None)),
+        patch.object(flip_mod, "identify", AsyncMock(return_value=ident)),
+    ):
+        res = await enable_api(
+            "1.2.3.4", web_user="a", web_pass="b", api_user="admin", api_pass="pw"
+        )
     assert not res.ok and res.verdict == "unsupported-dialect"
 
 
 @pytest.mark.asyncio
 async def test_enable_api_unreachable():
     ident = DeviceIdentity(host="1.2.3.4", reachable=False, dialect=ApiDialect.UNKNOWN)
-    with patch.object(flip_mod, "verify_digest", AsyncMock(return_value=False)), \
-         patch.object(flip_mod, "identify", AsyncMock(return_value=ident)):
-        res = await enable_api("1.2.3.4", web_user="a", web_pass="b",
-                               api_user="admin", api_pass="pw")
+    with (
+        patch.object(flip_mod, "_probe_digest_endpoint", AsyncMock(return_value=None)),
+        patch.object(flip_mod, "identify", AsyncMock(return_value=ident)),
+    ):
+        res = await enable_api(
+            "1.2.3.4", web_user="a", web_pass="b", api_user="admin", api_pass="pw"
+        )
     assert not res.ok and res.verdict == "unreachable"
 
 
 @pytest.mark.asyncio
 async def test_enable_api_fcgi_not_verified_reports_failure():
-    ident = DeviceIdentity(host="1.2.3.4", reachable=True,
-                           dialect=ApiDialect.FCGI_WEB, model="X916")
-    with patch.object(flip_mod, "verify_digest", AsyncMock(return_value=False)), \
-         patch.object(flip_mod, "identify", AsyncMock(return_value=ident)), \
-         patch.object(flip_mod, "_flip_fcgi", AsyncMock(return_value="")):
-        res = await enable_api("1.2.3.4", web_user="a", web_pass="b",
-                               api_user="admin", api_pass="pw")
+    ident = DeviceIdentity(
+        host="1.2.3.4", reachable=True, dialect=ApiDialect.FCGI_WEB, model="X916"
+    )
+    with (
+        patch.object(flip_mod, "_probe_digest_endpoint", AsyncMock(return_value=None)),
+        patch.object(flip_mod, "identify", AsyncMock(return_value=ident)),
+        patch.object(flip_mod, "_flip_fcgi", AsyncMock(return_value=("", None))),
+    ):
+        res = await enable_api(
+            "1.2.3.4", web_user="a", web_pass="b", api_user="admin", api_pass="pw"
+        )
     assert not res.ok and res.verdict == "not-verified"
 
 

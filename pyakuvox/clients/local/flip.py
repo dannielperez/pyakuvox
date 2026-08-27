@@ -57,8 +57,17 @@ class FlipResult(BaseModel):
     verdict: str = ""
     auth_mode: FirmwareAuthMode | None = None
     dialect: ApiDialect = ApiDialect.UNKNOWN
-    encoding_used: str = ""        # which password encoding finally verified
+    encoding_used: str = ""  # which password encoding finally verified
+    verified_scheme: str = ""
+    verified_port: int | None = None
     error: str = ""
+
+
+class _DigestEndpoint(BaseModel):
+    """HTTP endpoint that proved the Digest API is usable."""
+
+    scheme: str
+    port: int
 
 
 def _ctx() -> ssl.SSLContext:
@@ -70,22 +79,23 @@ def _ctx() -> ssl.SSLContext:
     return ctx
 
 
-async def verify_digest(
+async def _probe_digest_endpoint(
     host: str,
     api_user: str,
     api_pass: str,
     *,
     timeout: float = 8.0,
-) -> bool:
-    """True if Digest returns a non-empty JSON object from system info.
+) -> _DigestEndpoint | None:
+    """Return the endpoint where Digest produced a non-empty JSON object.
 
     Tries HTTPS (S5xx) then HTTP (X916/R29C). This is the ground-truth check
     that the API is actually usable headlessly — not just that a write returned
     ``200``.
     """
     auth = httpx.DigestAuth(api_user, api_pass)
-    async with httpx.AsyncClient(verify=_ctx(), timeout=httpx.Timeout(timeout),
-                                 follow_redirects=True) as c:
+    async with httpx.AsyncClient(
+        verify=_ctx(), timeout=httpx.Timeout(timeout), follow_redirects=True
+    ) as c:
         for scheme in ("https", "http"):
             try:
                 r = await c.get(f"{scheme}://{host}/api/system/info", auth=auth)
@@ -101,25 +111,57 @@ async def verify_digest(
             except ValueError:
                 continue
             if isinstance(payload, dict) and payload:
-                return True
-    return False
+                return _DigestEndpoint(
+                    scheme=scheme,
+                    port=443 if scheme == "https" else 80,
+                )
+    return None
+
+
+async def verify_digest(
+    host: str,
+    api_user: str,
+    api_pass: str,
+    *,
+    timeout: float = 8.0,
+) -> bool:
+    """True if Digest is usable on either supported local API endpoint."""
+    return (
+        await _probe_digest_endpoint(
+            host,
+            api_user,
+            api_pass,
+            timeout=timeout,
+        )
+        is not None
+    )
 
 
 async def _verify(
-    host: str, api_user: str, api_pass: str,
-    auth_mode: FirmwareAuthMode, cfg: HttpApiConfig | None,
-) -> bool:
+    host: str,
+    api_user: str,
+    api_pass: str,
+    auth_mode: FirmwareAuthMode,
+    cfg: HttpApiConfig | None,
+) -> tuple[bool, _DigestEndpoint | None]:
     """Did the flip take? Digest modes are proven end-to-end; other modes are
     confirmed by the auth mode read back from the device."""
     if auth_mode in _DIGEST_MODES:
-        return await verify_digest(host, api_user, api_pass)
-    return cfg is not None and cfg.auth_mode == auth_mode
+        endpoint = await _probe_digest_endpoint(host, api_user, api_pass)
+        return endpoint is not None, endpoint
+    return cfg is not None and cfg.auth_mode == auth_mode, None
 
 
 async def _flip_fcgi(
-    host: str, web_user: str, web_pass: str, api_user: str, api_pass: str,
-    auth_mode: FirmwareAuthMode, model: str, timeout: int,
-) -> str:
+    host: str,
+    web_user: str,
+    web_pass: str,
+    api_user: str,
+    api_pass: str,
+    auth_mode: FirmwareAuthMode,
+    model: str,
+    timeout: int,
+) -> tuple[str, _DigestEndpoint | None]:
     """Flip a ``/fcgi/do`` panel; try each encoding, verifying between. Returns
     the encoding that verified, or "" if none did."""
     # Prefer the model-implied encoding first, but try both (firmware varies).
@@ -134,20 +176,28 @@ async def _flip_fcgi(
         except AkuvoxError as exc:
             logger.debug("fcgi_flip_attempt_failed", host=host, encoding=enc.value, error=str(exc))
             continue
-        if await _verify(host, api_user, api_pass, auth_mode, cfg):
-            return enc.value
-    return ""
+        verified, endpoint = await _verify(host, api_user, api_pass, auth_mode, cfg)
+        if verified:
+            return enc.value, endpoint
+    return "", None
 
 
 async def _flip_webapi(
-    host: str, web_user: str, web_pass: str, api_user: str, api_pass: str,
-    auth_mode: FirmwareAuthMode, model: str, timeout: int,
-) -> str:
+    host: str,
+    web_user: str,
+    web_pass: str,
+    api_user: str,
+    api_pass: str,
+    auth_mode: FirmwareAuthMode,
+    model: str,
+    timeout: int,
+) -> tuple[str, _DigestEndpoint | None]:
     """Flip an ``/api/web/*`` SPA panel. Returns "web_api" if it verified."""
     async with WebApiClient(host, timeout=timeout) as web:
         await web.login(web_user, web_pass)
         cfg = await web.enable_api_access(api_user, api_pass, auth_mode)
-    return "web_api" if await _verify(host, api_user, api_pass, auth_mode, cfg) else ""
+    verified, endpoint = await _verify(host, api_user, api_pass, auth_mode, cfg)
+    return ("web_api", endpoint) if verified else ("", None)
 
 
 async def enable_api(
@@ -171,8 +221,13 @@ async def enable_api(
     """
     res = FlipResult(host=host, auth_mode=auth_mode)
 
-    if auth_mode in _DIGEST_MODES and await verify_digest(host, api_user, api_pass):
+    endpoint = None
+    if auth_mode in _DIGEST_MODES:
+        endpoint = await _probe_digest_endpoint(host, api_user, api_pass)
+    if endpoint is not None:
         res.ok, res.verdict, res.dialect = True, "already-set", ApiDialect.DIGEST_API
+        res.verified_scheme = endpoint.scheme
+        res.verified_port = endpoint.port
         return res
 
     ident = await identify(host)
@@ -196,14 +251,25 @@ async def enable_api(
     last_err = ""
     for path in paths:
         try:
-            used = await path(host, web_user, web_pass, api_user, api_pass,
-                              auth_mode, model or "", timeout)
+            used, endpoint = await path(
+                host,
+                web_user,
+                web_pass,
+                api_user,
+                api_pass,
+                auth_mode,
+                model or "",
+                timeout,
+            )
         except AkuvoxError as exc:
             last_err = f"{type(exc).__name__}: {exc}"
             logger.debug("flip_path_error", host=host, path=path.__name__, error=last_err)
             continue
         if used:
             res.ok, res.verdict, res.encoding_used = True, "applied", used
+            if endpoint is not None:
+                res.verified_scheme = endpoint.scheme
+                res.verified_port = endpoint.port
             return res
 
     res.verdict = "not-verified"
@@ -225,7 +291,12 @@ async def enable_api_digest(
     ``auth_mode=Digest`` — make a panel headless-manageable by ``LocalClient``.
     """
     return await enable_api(
-        host, web_user=web_user, web_pass=web_pass,
-        api_user=api_user, api_pass=api_pass,
-        auth_mode=FirmwareAuthMode.DIGEST, model=model, timeout=timeout,
+        host,
+        web_user=web_user,
+        web_pass=web_pass,
+        api_user=api_user,
+        api_pass=api_pass,
+        auth_mode=FirmwareAuthMode.DIGEST,
+        model=model,
+        timeout=timeout,
     )
