@@ -56,6 +56,16 @@ _SIP_TRANSPORT_CODES = {
     "tls": "2",
     "dns-naptr": "3",
 }
+SIP_PASSWORD_MAX_LENGTH = 63
+SIP_PASSWORD_FORBIDDEN_CHARACTERS = frozenset({"&", "%", "'", "="})
+
+
+def validate_sip_password(password: str) -> None:
+    """Validate a SIP password against Akuvox account input constraints."""
+    if len(password) > SIP_PASSWORD_MAX_LENGTH:
+        raise ValueError(f"Akuvox SIP passwords cannot exceed {SIP_PASSWORD_MAX_LENGTH} characters")
+    if SIP_PASSWORD_FORBIDDEN_CHARACTERS.intersection(password):
+        raise ValueError("Akuvox SIP passwords contain unsupported characters")
 
 
 class _DeviceClient(Protocol):
@@ -599,6 +609,7 @@ class AkuvoxDevice:
         persisted. E18C single-account writes remain unsupported because that
         dialect requires the keyed ``/web`` edit envelope.
         """
+        validate_sip_password(password)
         transport_name = transport.strip().lower()
         try:
             transport_code = _SIP_TRANSPORT_CODES[transport_name]

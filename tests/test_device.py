@@ -633,6 +633,45 @@ def test_set_sip_account_rejects_unknown_transport_without_writing():
     assert dev._client.sets == []
 
 
+@pytest.mark.parametrize(
+    "password",
+    ["x" * 64, "bad&secret", "bad%secret", "bad'secret", "bad=secret"],
+)
+def test_set_sip_account_rejects_device_incompatible_password_without_reading(
+    password: str,
+):
+    dev = _device(_multi_account_config())
+
+    with pytest.raises(ValueError) as exc_info:
+        _run(
+            dev.set_sip_account(
+                2,
+                server=PRIMARY,
+                username="1001",
+                password=password,
+                apply=True,
+            )
+        )
+
+    assert password not in str(exc_info.value)
+    assert dev._client.sets == []
+
+
+def test_set_sip_account_accepts_63_character_safe_password():
+    dev = _device(_multi_account_config())
+
+    res = _run(
+        dev.set_sip_account(
+            2,
+            server=PRIMARY,
+            username="1001",
+            password="A" * 63,
+        )
+    )
+
+    assert res["verdict"] == "would-change"
+
+
 def test_set_sip_account_refuses_e18c_apply():
     dev = _device(
         {

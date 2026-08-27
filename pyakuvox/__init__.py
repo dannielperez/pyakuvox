@@ -53,11 +53,14 @@ if TYPE_CHECKING:
     )
     from pyakuvox.config import LocalAuthType, LocalSettings
     from pyakuvox.device import (
+        SIP_PASSWORD_FORBIDDEN_CHARACTERS,
+        SIP_PASSWORD_MAX_LENGTH,
         AkuvoxDevice,
         CredentialRotationResult,
         CredentialRotationVerdict,
         SetResult,
         SetVerdict,
+        validate_sip_password,
     )
     from pyakuvox.models.device import DeviceInfo, DeviceStatus, RelayState
 else:
@@ -71,11 +74,14 @@ else:
         )
         from pyakuvox.config import LocalAuthType, LocalSettings
         from pyakuvox.device import (
+            SIP_PASSWORD_FORBIDDEN_CHARACTERS,
+            SIP_PASSWORD_MAX_LENGTH,
             AkuvoxDevice,
             CredentialRotationResult,
             CredentialRotationVerdict,
             SetResult,
             SetVerdict,
+            validate_sip_password,
         )
         from pyakuvox.models.device import DeviceInfo, DeviceStatus, RelayState
     except ModuleNotFoundError:  # pragma: no cover - supports lightweight helper imports
@@ -89,14 +95,19 @@ else:
         AkuvoxDevice = None
         CredentialRotationResult = None
         CredentialRotationVerdict = None
+        SIP_PASSWORD_FORBIDDEN_CHARACTERS = None
+        SIP_PASSWORD_MAX_LENGTH = None
         SetResult = None
         SetVerdict = None
+        validate_sip_password = None
         DeviceInfo = None
         DeviceStatus = None
         RelayState = None
 
 __all__ = [
     "DOCUMENTED_MJPEG_SNAPSHOT_PATHS",
+    "SIP_PASSWORD_FORBIDDEN_CHARACTERS",
+    "SIP_PASSWORD_MAX_LENGTH",
     "AkuvoxDevice",
     "AkuvoxError",
     "AmbiguousMutationError",
@@ -143,5 +154,6 @@ __all__ = [
     "plan_static_network",
     "render_body",
     "render_url",
+    "validate_sip_password",
     "verify_digest",
 ]
