@@ -11,14 +11,25 @@ import pytest
 from pyakuvox.identify import (
     ApiDialect,
     DeviceIdentity,
+    SIPStatusSource,
     dialect_for_model,
     identify,
+    profile_for_model,
 )
 
 
 def _status_body(model: str, fw: str = "1.0", hw: str = "1") -> str:
     return json.dumps(
-        {"retcode": 0, "data": {"Status": {"Model": model, "FirmwareVersion": fw, "HardwareVersion": hw}}}
+        {
+            "retcode": 0,
+            "data": {
+                "Status": {
+                    "Model": model,
+                    "FirmwareVersion": fw,
+                    "HardwareVersion": hw,
+                }
+            },
+        }
     )
 
 
@@ -52,6 +63,23 @@ def test_dialect_for_model(model, expected):
     assert dialect_for_model(model) == expected
 
 
+def test_x916_profile_selects_https_fcgi_execution() -> None:
+    profile = profile_for_model("X916S")
+
+    assert profile.dialect is ApiDialect.FCGI_WEB
+    assert profile.web_endpoints == (("https", 443),)
+    assert profile.config_password_encodings == ("x916", "r29c")
+    assert profile.sip_status_source is SIPStatusSource.FCGI_WEB
+
+
+def test_unknown_profile_refuses_model_specific_execution() -> None:
+    profile = profile_for_model("WhoKnows")
+
+    assert profile.dialect is ApiDialect.UNKNOWN
+    assert profile.web_endpoints == ()
+    assert profile.sip_status_source is SIPStatusSource.UNSUPPORTED
+
+
 # ── identification decision tree ────────────────────────────────────
 
 
@@ -59,7 +87,11 @@ def test_digest_api_401_realm():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/system/info"
         return httpx.Response(
-            401, headers={"www-authenticate": 'Digest realm="HTTP API"', "server": "lighttpd/1.4.30"}
+            401,
+            headers={
+                "www-authenticate": 'Digest realm="HTTP API"',
+                "server": "lighttpd/1.4.30",
+            },
         )
 
     ident = _run(identify("192.0.2.1", transport=_transport(handler)))
@@ -121,7 +153,8 @@ def test_legacy_e18c_403_then_productname():
         if request.url.path == "/api/system/info":
             return httpx.Response(403, headers={"server": "lighttpd web server"})
         if request.url.path == "/web/status/get":
-            return httpx.Response(200, text=json.dumps({"retcode": 0, "data": {"ProductName": "E18C"}}))
+            body = {"retcode": 0, "data": {"ProductName": "E18C"}}
+            return httpx.Response(200, text=json.dumps(body))
         return httpx.Response(404)
 
     ident = _run(identify("192.0.2.4", transport=_transport(handler)))

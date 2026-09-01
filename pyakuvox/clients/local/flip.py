@@ -40,7 +40,7 @@ from pyakuvox.clients.local.webui import (
     WebUIClient,
 )
 from pyakuvox.exceptions import AkuvoxError
-from pyakuvox.identify import ApiDialect, dialect_for_model, identify
+from pyakuvox.identify import ApiDialect, identify, profile_for_model
 
 logger = structlog.get_logger(__name__)
 
@@ -165,10 +165,13 @@ async def _flip_fcgi(
     """Flip a ``/fcgi/do`` panel; try each encoding, verifying between. Returns
     the encoding that verified, or "" if none did."""
     # Prefer the model-implied encoding first, but try both (firmware varies).
+    profile = profile_for_model(model)
     order = [ConfigPasswordEncoding.R29C, ConfigPasswordEncoding.X916]
-    if dialect_for_model(model) is ApiDialect.FCGI_WEB or (model or "").upper().startswith("X916"):
-        order = [ConfigPasswordEncoding.X916, ConfigPasswordEncoding.R29C]
-    endpoints = (
+    if profile.config_password_encodings:
+        order = [ConfigPasswordEncoding(value) for value in profile.config_password_encodings]
+    endpoints = tuple(
+        {"port": port, "use_ssl": scheme == "https"} for scheme, port in profile.web_endpoints
+    ) or (
         {"port": 80, "use_ssl": False},
         {"port": 443, "use_ssl": True},
     )
