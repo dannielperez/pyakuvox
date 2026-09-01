@@ -36,6 +36,7 @@ from pyakuvox.clients.local.encoding import (
     encode_config_password,
     encode_config_password_legacy,
     encode_login_password,
+    encode_login_password_aes,
     post_encode,
 )
 from pyakuvox.exceptions import AuthenticationError, ConnectionError, DeviceError
@@ -168,8 +169,11 @@ class WebUIClient:
         client = self._ensure_client()
         log = logger.bind(host=self._host)
 
-        # Step 1: Get encryption nonce
+        # Newer FCGI firmware advertises CryptoJS AES on its login page. Detect
+        # it rather than trying both encodings, since failed attempts can count
+        # toward a device lockout.
         try:
+            login_page = await client.get(f"{self.base_url}/fcgi/do?id=1")
             resp = await client.get(f"{self.base_url}/fcgi/do?action=Encrypt")
         except httpx.ConnectError as exc:
             raise ConnectionError(f"Cannot reach {self._host}: {exc}") from exc
@@ -182,9 +186,15 @@ class WebUIClient:
         nonce = match.group(1)
         log.debug("webui_nonce_received", nonce_len=len(nonce))
 
-        # Step 2: Encode credentials
-        encoded_password = encode_login_password(nonce, password)
+        # Step 2: Encode credentials using the flow declared by this firmware.
+        uses_aes_login = "AESEncrypt" in login_page.text
+        encoded_password = (
+            encode_login_password_aes(nonce, password)
+            if uses_aes_login
+            else encode_login_password(nonce, password)
+        )
         encoded_username = post_encode(username)
+        log.debug("webui_login_encoding_selected", encoding="aes" if uses_aes_login else "base64")
 
         # Set cookies expected by the web UI
         client.cookies.set("UserName", username, domain=self._host)
@@ -353,18 +363,21 @@ class WebUIClient:
         Sets auth mode to Digest (mode 4) by default — the most secure
         option that works reliably across tested firmware versions.
 
-        Note: Does NOT send the ``enabled`` flag because some firmware
-        versions (e.g. R29C) reject the entire submission when cEnable
-        is included. The HTTP API is enabled by default on all tested
-        models.
+        The credential/auth update intentionally omits ``enabled`` because some
+        R29C firmware rejects a combined submission containing ``cEnable``.
+        When readback shows the API is disabled, enable it with a second,
+        standalone submission. This is required by newer X916S firmware.
 
         Args:
             username: API username.
             password: API password.
             auth_mode: Auth mode to set (default: Digest).
         """
-        return await self.set_http_api_config(
+        config = await self.set_http_api_config(
             auth_mode=auth_mode,
             username=username,
             password=password,
         )
+        if not config.enabled:
+            config = await self.set_http_api_config(enabled=True)
+        return config

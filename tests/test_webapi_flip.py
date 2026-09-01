@@ -17,6 +17,7 @@ from pyakuvox.clients.local.encoding import (
     encode_config_password,
     encode_config_password_legacy,
     encode_config_password_webapi,
+    encode_login_password_aes,
     post_encode,
 )
 from pyakuvox.clients.local.flip import (
@@ -26,7 +27,7 @@ from pyakuvox.clients.local.flip import (
     verify_digest,
 )
 from pyakuvox.clients.local.webapi import WebApiClient
-from pyakuvox.clients.local.webui import FirmwareAuthMode
+from pyakuvox.clients.local.webui import FirmwareAuthMode, WebUIClient
 from pyakuvox.exceptions import AuthenticationError
 from pyakuvox.identify import ApiDialect, DeviceIdentity
 
@@ -82,6 +83,84 @@ def test_the_three_encodings_are_distinct():
         )
         == 3
     )
+
+
+def test_aes_login_encoding_matches_cryptojs_openssl_format():
+    encoded = encode_login_password_aes(
+        "nonce-value",
+        "device-password",
+        salt=bytes.fromhex("0001020304050607"),
+    )
+    assert encoded == "U2FsdGVkX18AAQIDBAUGBwpkAfDElKpHV2T+xYMEAcpenzwxUo/s64nzPfPAvTxR"
+
+
+@pytest.mark.asyncio
+async def test_fcgi_login_uses_aes_when_https_page_advertises_it():
+    mock = AsyncMock()
+    mock.cookies = httpx.Cookies()
+    mock.get = AsyncMock(
+        side_effect=[
+            _resp(text="<script>AESEncrypt(randStr, randStr + PassWord)</script>"),
+            _resp(text="<input id=hcSingleResult value='NONCE'>"),
+        ]
+    )
+    mock.post = AsyncMock(
+        return_value=_resp(text="<input id=hcSessionIdNow value='SESSION'>")
+    )
+
+    with patch(
+        "pyakuvox.clients.local.webui.encode_login_password_aes",
+        return_value="AES-CIPHERTEXT",
+    ) as encode_aes:
+        async with WebUIClient("1.2.3.4", port=443, use_ssl=True) as web:
+            web._client = mock
+            assert await web.login("admin", "shared-password") == "SESSION"
+
+    encode_aes.assert_called_once_with("NONCE", "shared-password")
+    submit_data = mock.post.call_args.kwargs["data"]["SubmitData"]
+    assert "Password=AES-CIPHERTEXT" in submit_data
+    assert mock.get.call_args_list[0].args[0].startswith("https://")
+
+
+@pytest.mark.asyncio
+async def test_fcgi_login_retains_legacy_encoding_when_aes_is_absent():
+    mock = AsyncMock()
+    mock.cookies = httpx.Cookies()
+    mock.get = AsyncMock(
+        side_effect=[
+            _resp(text="<script>Base64Encode(randStr + PassWord)</script>"),
+            _resp(text="<input id=hcSingleResult value='NONCE'>"),
+        ]
+    )
+    mock.post = AsyncMock(
+        return_value=_resp(text="<input id=hcSessionIdNow value='SESSION'>")
+    )
+
+    async with WebUIClient("1.2.3.4") as web:
+        web._client = mock
+        await web.login("admin", "shared-password")
+
+    submit_data = mock.post.call_args.kwargs["data"]["SubmitData"]
+    legacy_password = post_encode(base64.b64encode(b"NONCEshared-password").decode())
+    assert f"Password={legacy_password}" in submit_data
+
+
+@pytest.mark.asyncio
+async def test_fcgi_enable_api_uses_standalone_enable_when_disabled():
+    disabled = flip_mod.HttpApiConfig(enabled=False)
+    enabled = flip_mod.HttpApiConfig(enabled=True)
+    async with WebUIClient("1.2.3.4") as web:
+        web.set_http_api_config = AsyncMock(side_effect=[disabled, enabled])
+        config = await web.enable_api_access("api-user", "api-password")
+
+    assert config.enabled
+    assert web.set_http_api_config.await_count == 2
+    assert web.set_http_api_config.await_args_list[0].kwargs == {
+        "auth_mode": FirmwareAuthMode.DIGEST,
+        "username": "api-user",
+        "password": "api-password",
+    }
+    assert web.set_http_api_config.await_args_list[1].kwargs == {"enabled": True}
 
 
 # ── WebApiClient SPA flow ────────────────────────────────────────────────
