@@ -636,6 +636,25 @@ def test_set_sip_account_accepts_write_only_password_readback():
     assert res["after"]["password_set"] is False
 
 
+def test_set_sip_account_sets_registration_period_with_account() -> None:
+    dev = _device(_multi_account_config())
+
+    result = _run(
+        dev.set_sip_account(
+            2,
+            server=PRIMARY,
+            username="1001",
+            password="new-secret",
+            registration_period=30,
+            apply=True,
+        )
+    )
+
+    assert result["verdict"] == "set-verified"
+    assert result["after"]["reg_timeout"] == "30"
+    assert result["after"]["reg_timeout2"] == "30"
+
+
 def test_set_sip_account_enables_disabled_account():
     dev = _device(_multi_account_config(**{"Config.Account2.GENERAL.Enable": "0"}))
 
