@@ -49,7 +49,9 @@ from pyakuvox.visitor import (
     RESIDENTIAL_VISITOR_INTERCOM_PRESET,
     PresetVerdict,
     VisitorIntercomPreset,
+    VisitorPresetAdapter,
     VisitorPresetResult,
+    visitor_preset_adapter,
 )
 
 if TYPE_CHECKING:
@@ -173,6 +175,7 @@ __all__ = [
     "UnsupportedFeatureError",
     "UserAccountSummary",
     "VisitorIntercomPreset",
+    "VisitorPresetAdapter",
     "VisitorPresetResult",
     "WebUIClient",
     "build_config_set_payload",
@@ -192,4 +195,5 @@ __all__ = [
     "render_url",
     "validate_sip_password",
     "verify_digest",
+    "visitor_preset_adapter",
 ]

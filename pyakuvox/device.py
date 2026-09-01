@@ -340,14 +340,14 @@ class AkuvoxDevice:
         from pyakuvox.visitor import (
             PresetVerdict,
             VisitorIntercomPreset,
-            require_x916_visitor_surface,
-            x916_visitor_config,
+            visitor_preset_adapter,
         )
 
         requested = VisitorIntercomPreset(name=preset)
         info = await self.info()
         model = str(getattr(getattr(info, "identity", None), "model", "")).upper()
-        if model != "X916":
+        adapter = visitor_preset_adapter(model)
+        if adapter is None:
             return {
                 "before": {},
                 "plan": {},
@@ -361,9 +361,9 @@ class AkuvoxDevice:
             }
 
         cfg = await self.get_config(refresh=True)
-        wants = x916_visitor_config(requested)
+        wants = adapter.build_config(requested)
         try:
-            require_x916_visitor_surface(cfg, wants)
+            adapter.validate_surface(cfg, wants)
         except DeviceError as exc:
             return {
                 "before": {},

@@ -9,7 +9,12 @@ import pytest
 
 from pyakuvox.device import AkuvoxDevice
 from pyakuvox.identify import ApiDialect, DeviceIdentity
-from pyakuvox.visitor import PresetVerdict, VisitorIntercomPreset, x916_visitor_config
+from pyakuvox.visitor import (
+    PresetVerdict,
+    VisitorIntercomPreset,
+    visitor_preset_adapter,
+    x916_visitor_config,
+)
 
 
 class FakeClient:
@@ -121,3 +126,12 @@ def test_preset_refuses_unknown_firmware_surface_before_writing():
 def test_preset_validates_relay_codes():
     with pytest.raises(ValueError, match="four unique single digits"):
         VisitorIntercomPreset(relay_codes=("6", "7", "7", "9"))
+
+
+def test_model_adapter_registry_never_guesses_fallback():
+    adapter = visitor_preset_adapter("x916")
+
+    assert adapter is not None
+    assert adapter.model == "X916"
+    assert adapter.transport == "digest-config-api"
+    assert visitor_preset_adapter("R29") is None

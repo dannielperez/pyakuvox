@@ -9,9 +9,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
 from pyakuvox.exceptions import DeviceError
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 RESIDENTIAL_VISITOR_INTERCOM_PRESET = "residential_visitor_intercom_v1"
 
@@ -60,6 +63,16 @@ class VisitorIntercomPreset:
             raise ValueError("relay codes must be four unique single digits")
         if not 1 <= self.relay_hold_seconds <= 60:
             raise ValueError("relay hold must be between 1 and 60 seconds")
+
+
+@dataclass(frozen=True, slots=True)
+class VisitorPresetAdapter:
+    """One model's audited transport and configuration mapping."""
+
+    model: str
+    transport: str
+    build_config: Callable[[VisitorIntercomPreset], dict[str, str]]
+    validate_surface: Callable[[dict[str, Any], dict[str, str]], None]
 
 
 def x916_visitor_config(preset: VisitorIntercomPreset) -> dict[str, str]:
@@ -117,11 +130,28 @@ def require_x916_visitor_surface(config: dict[str, Any], wants: dict[str, str]) 
         )
 
 
+_VISITOR_PRESET_ADAPTERS = {
+    "X916": VisitorPresetAdapter(
+        model="X916",
+        transport="digest-config-api",
+        build_config=x916_visitor_config,
+        validate_surface=require_x916_visitor_surface,
+    ),
+}
+
+
+def visitor_preset_adapter(model: str) -> VisitorPresetAdapter | None:
+    """Return the audited adapter for a model without guessing a fallback."""
+    return _VISITOR_PRESET_ADAPTERS.get(model.strip().upper())
+
+
 __all__ = [
     "RESIDENTIAL_VISITOR_INTERCOM_PRESET",
     "PresetVerdict",
     "VisitorIntercomPreset",
+    "VisitorPresetAdapter",
     "VisitorPresetResult",
     "require_x916_visitor_surface",
+    "visitor_preset_adapter",
     "x916_visitor_config",
 ]
