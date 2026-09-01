@@ -145,6 +145,24 @@ async def test_fcgi_login_retains_legacy_encoding_when_aes_is_absent():
     assert f"Password={legacy_password}" in submit_data
 
 
+@pytest.mark.asyncio
+async def test_fcgi_enable_api_uses_standalone_enable_when_disabled():
+    disabled = flip_mod.HttpApiConfig(enabled=False)
+    enabled = flip_mod.HttpApiConfig(enabled=True)
+    async with WebUIClient("1.2.3.4") as web:
+        web.set_http_api_config = AsyncMock(side_effect=[disabled, enabled])
+        config = await web.enable_api_access("api-user", "api-password")
+
+    assert config.enabled
+    assert web.set_http_api_config.await_count == 2
+    assert web.set_http_api_config.await_args_list[0].kwargs == {
+        "auth_mode": FirmwareAuthMode.DIGEST,
+        "username": "api-user",
+        "password": "api-password",
+    }
+    assert web.set_http_api_config.await_args_list[1].kwargs == {"enabled": True}
+
+
 # ── WebApiClient SPA flow ────────────────────────────────────────────────
 
 

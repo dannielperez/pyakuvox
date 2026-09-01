@@ -363,18 +363,21 @@ class WebUIClient:
         Sets auth mode to Digest (mode 4) by default — the most secure
         option that works reliably across tested firmware versions.
 
-        Note: Does NOT send the ``enabled`` flag because some firmware
-        versions (e.g. R29C) reject the entire submission when cEnable
-        is included. The HTTP API is enabled by default on all tested
-        models.
+        The credential/auth update intentionally omits ``enabled`` because some
+        R29C firmware rejects a combined submission containing ``cEnable``.
+        When readback shows the API is disabled, enable it with a second,
+        standalone submission. This is required by newer X916S firmware.
 
         Args:
             username: API username.
             password: API password.
             auth_mode: Auth mode to set (default: Digest).
         """
-        return await self.set_http_api_config(
+        config = await self.set_http_api_config(
             auth_mode=auth_mode,
             username=username,
             password=password,
         )
+        if not config.enabled:
+            config = await self.set_http_api_config(enabled=True)
+        return config
