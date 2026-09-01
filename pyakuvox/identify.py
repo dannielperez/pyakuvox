@@ -34,6 +34,7 @@ import asyncio
 import json
 import ssl
 from contextlib import suppress
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
@@ -50,34 +51,72 @@ class ApiDialect(StrEnum):
     """How a device's local HTTP API must be spoken to."""
 
     DIGEST_API = "digest_api"  # /api/* HTTP Digest (LocalClient drives this headlessly)
-    WEB_API = "web_api"        # /api/web/* token login (SPA S5xx/R29C — JS-hashed login)
+    WEB_API = "web_api"  # /api/web/* token login (SPA S5xx/R29C — JS-hashed login)
     LEGACY_WEB = "legacy_web"  # /web/* token login (E18C — JS-hashed login)
-    FCGI_WEB = "fcgi_web"      # /fcgi/do session (X916/older R29C — see WebUIClient)
+    FCGI_WEB = "fcgi_web"  # /fcgi/do session (X916/older R29C — see WebUIClient)
     UNKNOWN = "unknown"
 
 
-# Model-prefix → dialect. Used as a cross-check / when a model is known up front.
-# Prefix match (case-insensitive); first hit wins, so order longer prefixes first.
-_MODEL_DIALECT: list[tuple[str, ApiDialect]] = [
-    ("S5", ApiDialect.WEB_API),     # S535 / S539 SPA
-    ("R29C", ApiDialect.WEB_API),   # R29C SPA variant
-    ("E18", ApiDialect.LEGACY_WEB),  # E18C door phone
-    ("X916", ApiDialect.FCGI_WEB),
-    ("R29", ApiDialect.DIGEST_API),  # plain R29 (non-C) generally digest
-    ("R27", ApiDialect.DIGEST_API),
-    ("A05", ApiDialect.DIGEST_API),
+class SIPStatusSource(StrEnum):
+    """Firmware surface used to read SIP registration state."""
+
+    FCGI_WEB = "fcgi_web"
+    UNSUPPORTED = "unsupported"
+
+
+@dataclass(frozen=True)
+class DeviceProfile:
+    """Model-selected local management behavior.
+
+    Runtime probes still detect firmware details such as AES login. The model
+    profile only selects stable routing decisions so applications do not need
+    to know which scheme, port, UI, or status page a model uses.
+    """
+
+    family: str
+    dialect: ApiDialect
+    web_endpoints: tuple[tuple[str, int], ...] = ()
+    config_password_encodings: tuple[str, ...] = ()
+    sip_status_source: SIPStatusSource = SIPStatusSource.UNSUPPORTED
+
+
+_UNKNOWN_PROFILE = DeviceProfile(family="unknown", dialect=ApiDialect.UNKNOWN)
+
+# Prefix match (case-insensitive); first hit wins, so longer prefixes come first.
+_MODEL_PROFILES: list[tuple[str, DeviceProfile]] = [
+    ("S5", DeviceProfile("S5", ApiDialect.WEB_API, (("https", 443),))),
+    ("R29C", DeviceProfile("R29C", ApiDialect.WEB_API, (("http", 80), ("https", 443)))),
+    ("E18", DeviceProfile("E18", ApiDialect.LEGACY_WEB, (("http", 80),))),
+    (
+        "X916",
+        DeviceProfile(
+            "X916",
+            ApiDialect.FCGI_WEB,
+            (("https", 443),),
+            ("x916", "r29c"),
+            SIPStatusSource.FCGI_WEB,
+        ),
+    ),
+    ("R29", DeviceProfile("R29", ApiDialect.DIGEST_API, (("http", 80),))),
+    ("R27", DeviceProfile("R27", ApiDialect.DIGEST_API, (("http", 80),))),
+    ("A05", DeviceProfile("A05", ApiDialect.DIGEST_API, (("http", 80),))),
 ]
+
+
+def profile_for_model(model: str | None) -> DeviceProfile:
+    """Return the immutable execution profile for a model string."""
+    if not model:
+        return _UNKNOWN_PROFILE
+    normalized = model.strip().upper()
+    for prefix, profile in _MODEL_PROFILES:
+        if normalized.startswith(prefix):
+            return profile
+    return _UNKNOWN_PROFILE
 
 
 def dialect_for_model(model: str | None) -> ApiDialect:
     """Best-effort dialect from a model string (e.g. 'S539', 'E18C')."""
-    if not model:
-        return ApiDialect.UNKNOWN
-    m = model.strip().upper()
-    for prefix, dialect in _MODEL_DIALECT:
-        if m.startswith(prefix):
-            return dialect
-    return ApiDialect.UNKNOWN
+    return profile_for_model(model).dialect
 
 
 class DeviceIdentity(BaseModel):
@@ -92,8 +131,13 @@ class DeviceIdentity(BaseModel):
     hardware: str = ""
     server: str = ""
     http_status: int | None = None  # status of the primary /api/system/info probe
-    model_source: str = ""          # which endpoint yielded model/fw ("" = none, needs login)
+    model_source: str = ""  # which endpoint yielded model/fw ("" = none, needs login)
     note: str = ""
+
+    @property
+    def profile(self) -> DeviceProfile:
+        """Model-driven management profile for this identity."""
+        return profile_for_model(self.model)
 
     @property
     def headless_manageable(self) -> bool:

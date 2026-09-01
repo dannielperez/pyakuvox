@@ -26,9 +26,12 @@ from pyakuvox.exceptions import (
 from pyakuvox.identify import (
     ApiDialect,
     DeviceIdentity,
+    DeviceProfile,
+    SIPStatusSource,
     dialect_for_model,
     identify,
     identify_many,
+    profile_for_model,
 )
 from pyakuvox.network import (
     ConfigKeyMap,
@@ -68,6 +71,7 @@ if TYPE_CHECKING:
         validate_sip_password,
     )
     from pyakuvox.models.device import DeviceInfo, DeviceStatus, RelayState
+    from pyakuvox.operations import read_sip_account_status
 else:
     try:
         from pyakuvox.clients.local.client import LocalClient
@@ -94,6 +98,7 @@ else:
             validate_sip_password,
         )
         from pyakuvox.models.device import DeviceInfo, DeviceStatus, RelayState
+        from pyakuvox.operations import read_sip_account_status
     except ModuleNotFoundError:  # pragma: no cover - supports lightweight helper imports
         LocalClient = None
         SIPAccountStatus = None
@@ -116,6 +121,7 @@ else:
         DeviceInfo = None
         DeviceStatus = None
         RelayState = None
+        read_sip_account_status = None
 
 __all__ = [
     "DOCUMENTED_MJPEG_SNAPSHOT_PATHS",
@@ -136,6 +142,7 @@ __all__ = [
     "DeviceError",
     "DeviceIdentity",
     "DeviceInfo",
+    "DeviceProfile",
     "DeviceStatus",
     "FlipResult",
     "JPEGSnapshot",
@@ -149,6 +156,7 @@ __all__ = [
     "RelayState",
     "SIPAccountStatus",
     "SIPRegistrationStatus",
+    "SIPStatusSource",
     "SecuritySnapshot",
     "SetResult",
     "SetVerdict",
@@ -168,6 +176,8 @@ __all__ = [
     "identify_many",
     "map_ip",
     "plan_static_network",
+    "profile_for_model",
+    "read_sip_account_status",
     "render_body",
     "render_url",
     "validate_sip_password",
