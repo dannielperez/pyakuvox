@@ -76,6 +76,11 @@ _DEVICE_INFO_RESPONSE = {
     },
 }
 
+_ENVELOPED_DEVICE_INFO_RESPONSE = {
+    "retcode": 0,
+    "data": _DEVICE_INFO_RESPONSE,
+}
+
 _DEVICE_STATUS_RESPONSE = {
     "retcode": 0,
     "SystemTime": "1700000000",
@@ -153,6 +158,18 @@ async def test_get_device_info_success(client):
     assert info.identity.mac_address == "AA:BB:CC:DD:EE:FF"
     assert info.identity.model == "X916S"
     assert info.firmware_version == "916.30.10.114"
+
+
+@pytest.mark.asyncio
+async def test_get_device_info_accepts_newer_data_envelope(client):
+    async with client:
+        client._client = AsyncMock()
+        client._client.request = AsyncMock(
+            return_value=_response(json_body=_ENVELOPED_DEVICE_INFO_RESPONSE)
+        )
+        info = await client.get_device_info()
+    assert info.identity.mac_address == "AA:BB:CC:DD:EE:FF"
+    assert info.identity.model == "X916S"
 
 
 @pytest.mark.asyncio

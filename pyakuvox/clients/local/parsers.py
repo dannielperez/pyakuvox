@@ -34,9 +34,12 @@ from pyakuvox.models.users import UserCode
 def parse_device_info(data: dict[str, Any], ip_address: str = "") -> DeviceInfo:
     """Parse /api/system/info response → DeviceInfo.
 
-    Expected shape: {"Status": {"Model": "...", "MAC": "...", ...}}
+    Expected shape: {"Status": {...}} or {"data": {"Status": {...}}}.
     """
-    status = data.get("Status", data)  # some devices omit the Status wrapper
+    payload = data.get("data", data)
+    if not isinstance(payload, dict):
+        raise ParseError("Expected dict in device info response", raw_data=data)
+    status = payload.get("Status", payload)  # some devices omit the Status wrapper
     if not isinstance(status, dict):
         raise ParseError("Expected dict in device info response", raw_data=data)
 
