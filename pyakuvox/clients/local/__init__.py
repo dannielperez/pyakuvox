@@ -18,6 +18,8 @@ from pyakuvox.clients.local.webui import (
     ConfigPasswordEncoding,
     FirmwareAuthMode,
     HttpApiConfig,
+    SIPAccountStatus,
+    SIPRegistrationStatus,
     WebUIClient,
 )
 
@@ -27,6 +29,8 @@ __all__ = [
     "FlipResult",
     "HttpApiConfig",
     "LocalClient",
+    "SIPAccountStatus",
+    "SIPRegistrationStatus",
     "WebApiClient",
     "WebUIClient",
     "enable_api",

@@ -595,6 +595,7 @@ class AkuvoxDevice:
         password: str,
         port: int | str = 5060,
         transport: str = "udp",
+        registration_period: int | None = None,
         apply: bool = False,
     ) -> SetResult:
         """Configure and verify one complete SIP registration account.
@@ -605,9 +606,11 @@ class AkuvoxDevice:
 
         Result dictionaries never contain the current or requested password.
         Default is a dry-run plan. ``apply=True`` writes and re-reads the full
-        account, returning ``set-verified`` only when every requested value
-        persisted. E18C single-account writes remain unsupported because that
-        dialect requires the keyed ``/web`` edit envelope.
+        account, returning ``set-verified`` when every readable requested value
+        persisted. Password fields are write-only on some firmware and are
+        verified end-to-end by SIP registration. E18C single-account writes
+        remain unsupported because that dialect requires the keyed ``/web``
+        edit envelope.
         """
         validate_sip_password(password)
         transport_name = transport.strip().lower()
@@ -618,6 +621,8 @@ class AkuvoxDevice:
             raise ValueError(
                 f"unsupported SIP transport {transport!r}; expected {supported}"
             ) from exc
+        if registration_period is not None and not 30 <= registration_period <= 65535:
+            raise ValueError("registration_period must be between 30 and 65535 seconds")
 
         cfg = await self.get_config()
         keys = self._resolve_account_keys(cfg, account)
@@ -630,6 +635,9 @@ class AkuvoxDevice:
             "auth_name": str(username),
             "password": str(password),
         }
+        if registration_period is not None:
+            wants["reg_timeout"] = str(registration_period)
+            wants["reg_timeout2"] = str(registration_period)
         before = {name: cfg.get(keys[name]) for name in wants if name != "password"}
         before["password_set"] = bool(cfg.get(keys["password"]))
 
@@ -670,7 +678,11 @@ class AkuvoxDevice:
 
         await self.set_config(diff)
         after_cfg = await self.get_config()
-        verified = all(str(after_cfg.get(keys[name], "")) == want for name, want in wants.items())
+        verified = all(
+            str(after_cfg.get(keys[name], "")) == want
+            for name, want in wants.items()
+            if name != "password"
+        )
         after = {name: after_cfg.get(keys[name]) for name in wants if name != "password"}
         after["password_set"] = bool(after_cfg.get(keys["password"]))
         return {

@@ -54,6 +54,15 @@ class NonStickingClient(FakeClient):
         self.sets.append(settings)
 
 
+class PasswordMaskingClient(FakeClient):
+    """Simulates firmware that never returns a configured SIP password."""
+
+    async def get_config(self):
+        config = await super().get_config()
+        config["data"]["Config.Account2.GENERAL.Pwd"] = ""
+        return config
+
+
 class TimingOutWriteClient(FakeClient):
     async def set_config(self, settings):
         self.sets.append(settings)
@@ -596,6 +605,54 @@ def test_set_sip_account_detects_silent_noop():
     assert res["verdict"] == "set-did-not-stick"
     assert res["applied"] is True
     assert "new-secret" not in repr(res)
+
+
+def test_set_sip_account_accepts_write_only_password_readback():
+    config = _multi_account_config(
+        **{
+            "Config.Account2.SIP.Server": PRIMARY,
+            "Config.Account2.GENERAL.UserName": "1001",
+            "Config.Account2.GENERAL.AuthName": "1001",
+        }
+    )
+    ident = DeviceIdentity(
+        host=DEVICE_HOST,
+        reachable=True,
+        dialect=ApiDialect.DIGEST_API,
+    )
+    dev = AkuvoxDevice(ident, PasswordMaskingClient(config))
+
+    res = _run(
+        dev.set_sip_account(
+            2,
+            server=PRIMARY,
+            username="1001",
+            password="new-secret",
+            apply=True,
+        )
+    )
+
+    assert res["verdict"] == "set-verified"
+    assert res["after"]["password_set"] is False
+
+
+def test_set_sip_account_sets_registration_period_with_account() -> None:
+    dev = _device(_multi_account_config())
+
+    result = _run(
+        dev.set_sip_account(
+            2,
+            server=PRIMARY,
+            username="1001",
+            password="new-secret",
+            registration_period=30,
+            apply=True,
+        )
+    )
+
+    assert result["verdict"] == "set-verified"
+    assert result["after"]["reg_timeout"] == "30"
+    assert result["after"]["reg_timeout2"] == "30"
 
 
 def test_set_sip_account_enables_disabled_account():

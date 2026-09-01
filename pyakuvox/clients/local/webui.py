@@ -45,6 +45,7 @@ logger = structlog.get_logger(__name__)
 
 # Config page for HTTP API settings.
 _HTTP_API_CONFIG_PAGE = "id=130&id=16"
+_STATUS_PAGE = "id=1"
 
 
 class ConfigPasswordEncoding(StrEnum):
@@ -72,6 +73,24 @@ class FirmwareAuthMode(IntEnum):
     DIGEST_SERVER = 3  # Server-side only — clients get 401
     DIGEST = 4  # Recommended for programmatic access
     BASIC_DIGEST = 5  # Hybrid — accepts Basic credentials
+
+
+class SIPRegistrationStatus(StrEnum):
+    DISABLED = "disabled"
+    UNREGISTERED = "unregistered"
+    REGISTERING = "registering"
+    REGISTERED = "registered"
+    FAILED = "failed"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class SIPAccountStatus:
+    account: int
+    username: str
+    server: str
+    status: SIPRegistrationStatus
+    raw_status: str
 
 
 @dataclass
@@ -288,6 +307,36 @@ class WebUIClient:
             password_set=bool(fields.get("hcPassword", "")),
             whitelist_ips=ips,
             raw_fields=fields,
+        )
+
+    async def get_sip_account_status(self, account: int) -> SIPAccountStatus:
+        """Read one SIP account's normalized registration status."""
+        if account < 1:
+            raise ValueError("account must be a positive integer")
+
+        fields = await self._read_page(_STATUS_PAGE)
+        account_count = int(fields.get("hcAccountNum", "0") or "0")
+        if account > account_count:
+            raise ValueError(f"account {account} is unavailable on this device")
+
+        index = account - 1
+        names = fields.get("hcAccountName", "").split("&")
+        servers = fields.get("hcAccountServer", "").split("&")
+        statuses = fields.get("hcAccountStatus", "").split("&")
+        raw_status = statuses[index] if index < len(statuses) else ""
+        normalized = {
+            "0": SIPRegistrationStatus.DISABLED,
+            "1": SIPRegistrationStatus.REGISTERING,
+            "2": SIPRegistrationStatus.REGISTERED,
+            "3": SIPRegistrationStatus.FAILED,
+            "-1": SIPRegistrationStatus.UNREGISTERED,
+        }.get(raw_status, SIPRegistrationStatus.UNKNOWN)
+        return SIPAccountStatus(
+            account=account,
+            username=names[index] if index < len(names) else "",
+            server=servers[index] if index < len(servers) else "",
+            status=normalized,
+            raw_status=raw_status,
         )
 
     async def set_http_api_config(

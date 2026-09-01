@@ -51,6 +51,11 @@ if TYPE_CHECKING:
         enable_api_digest,
         verify_digest,
     )
+    from pyakuvox.clients.local.webui import (
+        SIPAccountStatus,
+        SIPRegistrationStatus,
+        WebUIClient,
+    )
     from pyakuvox.config import LocalAuthType, LocalSettings
     from pyakuvox.device import (
         SIP_PASSWORD_FORBIDDEN_CHARACTERS,
@@ -72,6 +77,11 @@ else:
             enable_api_digest,
             verify_digest,
         )
+        from pyakuvox.clients.local.webui import (
+            SIPAccountStatus,
+            SIPRegistrationStatus,
+            WebUIClient,
+        )
         from pyakuvox.config import LocalAuthType, LocalSettings
         from pyakuvox.device import (
             SIP_PASSWORD_FORBIDDEN_CHARACTERS,
@@ -86,6 +96,9 @@ else:
         from pyakuvox.models.device import DeviceInfo, DeviceStatus, RelayState
     except ModuleNotFoundError:  # pragma: no cover - supports lightweight helper imports
         LocalClient = None
+        SIPAccountStatus = None
+        SIPRegistrationStatus = None
+        WebUIClient = None
         FlipResult = None
         enable_api = None
         enable_api_digest = None
@@ -134,6 +147,8 @@ __all__ = [
     "RTSPFrame",
     "RTSPStreamConfig",
     "RelayState",
+    "SIPAccountStatus",
+    "SIPRegistrationStatus",
     "SecuritySnapshot",
     "SetResult",
     "SetVerdict",
@@ -141,6 +156,7 @@ __all__ = [
     "UnsupportedDialectError",
     "UnsupportedFeatureError",
     "UserAccountSummary",
+    "WebUIClient",
     "build_config_set_payload",
     "build_rtsp_url",
     "capture_mjpeg_snapshot",
