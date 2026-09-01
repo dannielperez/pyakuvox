@@ -428,7 +428,7 @@ class LocalClient(AkuvoxClientBase):
         """Point *account*'s SIP registration at *server* (+ optional *server2* backup).
 
         Convenience over :meth:`set_config` for the fleet repoint — e.g.
-        ``set_sip_registrar(2, "10.254.250.11", "")`` moves Account 2 onto the WG
+        ``set_sip_registrar(2, "192.0.2.11", "")`` moves Account 2 onto a VPN
         tunnel and clears any (stale, public) backup so it can't fail back off-tunnel.
         Set ``reboot=True`` to flash-save on firmware that needs it. Server-only writes
         are safe (they don't disturb the account password). Note: newer SPA firmware

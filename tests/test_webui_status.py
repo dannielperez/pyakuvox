@@ -12,16 +12,16 @@ async def test_get_sip_account_status_normalizes_registered_account() -> None:
     client._read_page = AsyncMock(
         return_value={
             "hcAccountNum": "2",
-            "hcAccountName": "&4401",
-            "hcAccountServer": "&10.254.250.11",
+            "hcAccountName": "&700",
+            "hcAccountServer": "&192.0.2.11",
             "hcAccountStatus": "-1&2",
         }
     )
 
     result = await client.get_sip_account_status(2)
 
-    assert result.username == "4401"
-    assert result.server == "10.254.250.11"
+    assert result.username == "700"
+    assert result.server == "192.0.2.11"
     assert result.status is SIPRegistrationStatus.REGISTERED
     assert result.raw_status == "2"
 

@@ -42,10 +42,10 @@ from pyakuvox.identify import ApiDialect, DeviceIdentity, identify
 if TYPE_CHECKING:
     from collections.abc import Collection
 
+    from pyakuvox.intercom import IntercomConfiguration, IntercomConfigurationResult
     from pyakuvox.models.device import DeviceInfo
     from pyakuvox.models.users import UserCode
     from pyakuvox.security import SecuritySnapshot
-    from pyakuvox.visitor import VisitorPresetResult
 
 logger = structlog.get_logger(__name__)
 
@@ -324,44 +324,51 @@ class AkuvoxDevice:
     async def reboot(self) -> bool:
         return await self._ensure_client().reboot()
 
-    async def ensure_visitor_intercom_preset(
+    async def ensure_intercom_configuration(
         self,
-        preset: str = "residential_visitor_intercom_v1",
+        configuration: IntercomConfiguration,
         *,
         apply: bool = False,
-    ) -> VisitorPresetResult:
-        """Apply and verify the audited X916 visitor homepage and relays.
+    ) -> IntercomConfigurationResult:
+        """Apply explicit homepage and relay intent through a model adapter.
 
-        The caller selects a vendor-neutral preset name.  This method verifies
-        both device model and field availability before dispatching one write,
-        then re-reads every required value.  It never guesses field names for
-        another model or firmware generation.
+        The caller owns all policy values. This method verifies the device model,
+        requested shape, and field availability before writing, then re-reads
+        every required value. It never guesses another model's field names.
         """
-        from pyakuvox.visitor import (
-            PresetVerdict,
-            VisitorIntercomPreset,
-            visitor_preset_adapter,
+        from pyakuvox.intercom import (
+            IntercomConfigurationVerdict,
+            intercom_adapter,
         )
 
-        requested = VisitorIntercomPreset(name=preset)
         info = await self.info()
         model = str(getattr(getattr(info, "identity", None), "model", "")).upper()
-        adapter = visitor_preset_adapter(model)
+        adapter = intercom_adapter(model)
         if adapter is None:
             return {
                 "before": {},
                 "plan": {},
                 "changed": False,
                 "applied": False,
-                "verdict": PresetVerdict.UNSUPPORTED_MODEL,
+                "verdict": IntercomConfigurationVerdict.UNSUPPORTED_MODEL,
                 "reason": (
-                    "No visitor-intercom preset adapter is registered for "
+                    "No intercom configuration adapter is registered for "
                     f"{model or 'unknown model'}."
                 ),
             }
 
         cfg = await self.get_config(refresh=True)
-        wants = adapter.build_config(requested)
+        try:
+            wants = adapter.build_config(configuration)
+        except ValueError as exc:
+            return {
+                "before": {},
+                "plan": {},
+                "changed": False,
+                "applied": False,
+                "verdict": IntercomConfigurationVerdict.UNSUPPORTED_CONFIGURATION,
+                "reason": str(exc),
+            }
         try:
             adapter.validate_surface(cfg, wants)
         except DeviceError as exc:
@@ -370,7 +377,7 @@ class AkuvoxDevice:
                 "plan": {},
                 "changed": False,
                 "applied": False,
-                "verdict": PresetVerdict.UNSUPPORTED_FIRMWARE,
+                "verdict": IntercomConfigurationVerdict.UNSUPPORTED_FIRMWARE,
                 "reason": str(exc),
             }
         diff = {key: want for key, want in wants.items() if str(cfg.get(key)) != want}
@@ -383,7 +390,7 @@ class AkuvoxDevice:
                 "plan": {},
                 "changed": False,
                 "applied": False,
-                "verdict": PresetVerdict.ALREADY_SET,
+                "verdict": IntercomConfigurationVerdict.ALREADY_SET,
                 "after": before,
             }
         if not apply:
@@ -392,7 +399,7 @@ class AkuvoxDevice:
                 "plan": plan,
                 "changed": True,
                 "applied": False,
-                "verdict": PresetVerdict.WOULD_CHANGE,
+                "verdict": IntercomConfigurationVerdict.WOULD_CHANGE,
             }
 
         await self.set_config(diff)
@@ -405,9 +412,9 @@ class AkuvoxDevice:
             "changed": True,
             "applied": True,
             "verdict": (
-                PresetVerdict.SET_VERIFIED
+                IntercomConfigurationVerdict.SET_VERIFIED
                 if verified
-                else PresetVerdict.SET_DID_NOT_STICK
+                else IntercomConfigurationVerdict.SET_DID_NOT_STICK
             ),
             "after": after,
         }

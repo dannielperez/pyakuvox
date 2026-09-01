@@ -13,14 +13,14 @@ from pyakuvox.operations import read_sip_account_status
 
 @pytest.mark.asyncio
 async def test_x916_status_uses_https_and_model_selected_client() -> None:
-    expected = SIPAccountStatus(2, "4401", "10.254.250.11", SIPRegistrationStatus.REGISTERED, "2")
+    expected = SIPAccountStatus(2, "700", "192.0.2.11", SIPRegistrationStatus.REGISTERED, "2")
     client = AsyncMock()
     client.__aenter__.return_value = client
     client.get_sip_account_status.return_value = expected
 
     with patch("pyakuvox.operations.WebUIClient", return_value=client) as client_class:
         result = await read_sip_account_status(
-            "10.40.43.241",
+            "192.0.2.241",
             2,
             username="admin",
             password="secret",
@@ -29,7 +29,7 @@ async def test_x916_status_uses_https_and_model_selected_client() -> None:
 
     assert result is expected
     client_class.assert_called_once_with(
-        host="10.40.43.241",
+        host="192.0.2.241",
         port=443,
         use_ssl=True,
         verify_ssl=False,
