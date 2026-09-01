@@ -11,6 +11,11 @@ Reverse-engineered from the Akuvox X916 web UI JavaScript
 from __future__ import annotations
 
 import base64
+import hashlib
+import os
+
+from cryptography.hazmat.primitives import padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 # PostEncode replacement map — order matters (backtick MUST be first).
 _POST_ENCODE_MAP: list[tuple[str, str]] = [
@@ -48,6 +53,39 @@ def encode_login_password(random_string: str, password: str) -> str:
     raw = random_string + password
     b64 = base64.b64encode(raw.encode("utf-8")).decode("ascii")
     return post_encode(b64)
+
+
+def encode_login_password_aes(
+    random_string: str,
+    password: str,
+    *,
+    salt: bytes | None = None,
+) -> str:
+    """Match ``CryptoJS.AES.encrypt(nonce + password, nonce).toString()``.
+
+    CryptoJS passphrase encryption derives an AES-256-CBC key and IV with the
+    OpenSSL EVP_BytesToKey MD5 scheme, then emits a base64 ``Salted__`` blob.
+    Newer HTTPS-only FCGI firmware uses this flow instead of the older base64
+    login encoding.
+    """
+    salt = os.urandom(8) if salt is None else salt
+    if len(salt) != 8:
+        raise ValueError("CryptoJS AES salt must be exactly 8 bytes")
+
+    passphrase = random_string.encode("utf-8")
+    derived = b""
+    block = b""
+    while len(derived) < 48:
+        block = hashlib.md5(block + passphrase + salt).digest()
+        derived += block
+    key, iv = derived[:32], derived[32:48]
+
+    padder = padding.PKCS7(algorithms.AES.block_size).padder()
+    plaintext = (random_string + password).encode("utf-8")
+    padded = padder.update(plaintext) + padder.finalize()
+    encryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
+    ciphertext = encryptor.update(padded) + encryptor.finalize()
+    return base64.b64encode(b"Salted__" + salt + ciphertext).decode("ascii")
 
 
 def encode_config_password(password: str) -> str:
