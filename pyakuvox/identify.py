@@ -164,6 +164,20 @@ async def _probe_web_api(client: httpx.AsyncClient, host: str) -> tuple[str, str
     return None
 
 
+async def _probe_fcgi_web(client: httpx.AsyncClient, host: str) -> bool:
+    """Return whether the panel exposes the legacy FCGI login nonce.
+
+    Some R29/X916 firmware redirects every HTTP request to HTTPS with 308.  A
+    redirect alone therefore cannot distinguish the Vue SPA from the older
+    ``/fcgi/do`` UI.
+    """
+    for scheme in ("https", "http"):
+        r = await _get(client, f"{scheme}://{host}/fcgi/do?action=Encrypt")
+        if r is not None and r.status_code == 200 and "value='" in r.text:
+            return True
+    return False
+
+
 async def _probe_legacy_web(client: httpx.AsyncClient, host: str) -> str | None:
     """E18C /web/status/get → ProductName, no auth."""
     for scheme in ("http", "https"):
@@ -234,12 +248,18 @@ async def identify(
             return ident
 
         if primary.status_code in (301, 302, 307, 308):
-            ident.dialect = ApiDialect.WEB_API
             web = await _probe_web_api(client, host)
             if web:
+                ident.dialect = ApiDialect.WEB_API
                 ident.model, ident.firmware, ident.hardware = web
                 ident.model_source = "/api/web/system/info"
-            ident.note = "SPA web API (login is browser-JS hashed)"
+                ident.note = "SPA web API (login is browser-JS hashed)"
+            elif await _probe_fcgi_web(client, host):
+                ident.dialect = ApiDialect.FCGI_WEB
+                ident.note = "HTTPS FCGI web UI (login uses /fcgi/do session)"
+            else:
+                ident.dialect = ApiDialect.WEB_API
+                ident.note = "SPA web API (login is browser-JS hashed)"
             return ident
 
         if primary.status_code == 403:

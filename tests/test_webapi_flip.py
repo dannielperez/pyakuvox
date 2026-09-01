@@ -27,6 +27,7 @@ from pyakuvox.clients.local.flip import (
 )
 from pyakuvox.clients.local.webapi import WebApiClient
 from pyakuvox.clients.local.webui import FirmwareAuthMode
+from pyakuvox.exceptions import AuthenticationError
 from pyakuvox.identify import ApiDialect, DeviceIdentity
 
 
@@ -152,6 +153,54 @@ async def test_webapi_enable_api_access_sends_base64_password():
 
 
 # ── Orchestrator dispatch (generic enable_api + Digest wrapper) ──────────
+
+
+@pytest.mark.asyncio
+async def test_fcgi_flip_falls_back_to_https_endpoint():
+    attempts = []
+
+    class FakeWebUIClient:
+        def __init__(self, _host, **kwargs):
+            self.port = kwargs["port"]
+            self.use_ssl = kwargs["use_ssl"]
+            attempts.append((self.port, self.use_ssl))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def login(self, _user, _password):
+            if not self.use_ssl:
+                raise AuthenticationError("HTTP redirected to HTTPS")
+
+        async def enable_api_access(self, _user, _password, _mode):
+            return object()
+
+    endpoint = flip_mod._DigestEndpoint(scheme="https", port=443)
+    with (
+        patch.object(flip_mod, "WebUIClient", FakeWebUIClient),
+        patch.object(
+            flip_mod,
+            "_verify",
+            AsyncMock(return_value=(True, endpoint)),
+        ),
+    ):
+        encoding, verified_endpoint = await flip_mod._flip_fcgi(
+            "1.2.3.4",
+            "admin",
+            "web-pass",
+            "admin",
+            "api-pass",
+            FirmwareAuthMode.DIGEST,
+            "R29C",
+            15,
+        )
+
+    assert attempts == [(80, False), (443, True)]
+    assert encoding == "r29c"
+    assert verified_endpoint == endpoint
 
 
 @pytest.mark.parametrize("text", ["", "not-json"])
