@@ -7,10 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from pyakuvox.device import AkuvoxDevice, SetVerdict
-from pyakuvox.exceptions import DeviceError
+from pyakuvox.device import AkuvoxDevice
 from pyakuvox.identify import ApiDialect, DeviceIdentity
-from pyakuvox.visitor import VisitorIntercomPreset, x916_visitor_config
+from pyakuvox.visitor import PresetVerdict, VisitorIntercomPreset, x916_visitor_config
 
 
 class FakeClient:
@@ -55,7 +54,7 @@ def test_preset_dry_run_plans_homepage_and_sequential_relays():
 
     result = run(device(client).ensure_visitor_intercom_preset())
 
-    assert result["verdict"] is SetVerdict.WOULD_CHANGE
+    assert result["verdict"] is PresetVerdict.WOULD_CHANGE
     assert result["changed"] is True
     assert client.sets == []
     wants = desired_config()
@@ -75,7 +74,7 @@ def test_preset_applies_once_and_verifies_complete_readback():
 
     result = run(device(client).ensure_visitor_intercom_preset(apply=True))
 
-    assert result["verdict"] is SetVerdict.SET_VERIFIED
+    assert result["verdict"] is PresetVerdict.SET_VERIFIED
     assert client.sets == [desired_config()]
 
 
@@ -84,7 +83,7 @@ def test_preset_already_set_does_not_write():
 
     result = run(device(client).ensure_visitor_intercom_preset(apply=True))
 
-    assert result["verdict"] is SetVerdict.ALREADY_SET
+    assert result["verdict"] is PresetVerdict.ALREADY_SET
     assert client.sets == []
 
 
@@ -94,15 +93,16 @@ def test_preset_detects_silent_device_noop():
 
     result = run(device(client).ensure_visitor_intercom_preset(apply=True))
 
-    assert result["verdict"] is SetVerdict.SET_DID_NOT_STICK
+    assert result["verdict"] is PresetVerdict.SET_DID_NOT_STICK
 
 
 def test_preset_refuses_non_x916_before_writing():
     client = FakeClient(desired_config(), model="R29")
 
-    with pytest.raises(DeviceError, match="only on X916"):
-        run(device(client).ensure_visitor_intercom_preset(apply=True))
+    result = run(device(client).ensure_visitor_intercom_preset(apply=True))
 
+    assert result["verdict"] is PresetVerdict.UNSUPPORTED_MODEL
+    assert "R29" in result["reason"]
     assert client.sets == []
 
 
@@ -111,9 +111,10 @@ def test_preset_refuses_unknown_firmware_surface_before_writing():
     config.pop("Config.DoorSetting.DTMF.DtmfWhitelist")
     client = FakeClient(config)
 
-    with pytest.raises(DeviceError, match="unsupported by this firmware"):
-        run(device(client).ensure_visitor_intercom_preset(apply=True))
+    result = run(device(client).ensure_visitor_intercom_preset(apply=True))
 
+    assert result["verdict"] is PresetVerdict.UNSUPPORTED_FIRMWARE
+    assert "missing" in result["reason"]
     assert client.sets == []
 
 

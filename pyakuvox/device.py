@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from pyakuvox.models.device import DeviceInfo
     from pyakuvox.models.users import UserCode
     from pyakuvox.security import SecuritySnapshot
+    from pyakuvox.visitor import VisitorPresetResult
 
 logger = structlog.get_logger(__name__)
 
@@ -328,7 +329,7 @@ class AkuvoxDevice:
         preset: str = "residential_visitor_intercom_v1",
         *,
         apply: bool = False,
-    ) -> SetResult:
+    ) -> VisitorPresetResult:
         """Apply and verify the audited X916 visitor homepage and relays.
 
         The caller selects a vendor-neutral preset name.  This method verifies
@@ -337,6 +338,7 @@ class AkuvoxDevice:
         another model or firmware generation.
         """
         from pyakuvox.visitor import (
+            PresetVerdict,
             VisitorIntercomPreset,
             require_x916_visitor_surface,
             x916_visitor_config,
@@ -346,14 +348,31 @@ class AkuvoxDevice:
         info = await self.info()
         model = str(getattr(getattr(info, "identity", None), "model", "")).upper()
         if model != "X916":
-            raise DeviceError(
-                f"visitor-intercom preset {preset!r} is supported only on X916, "
-                f"got {model or 'unknown'}"
-            )
+            return {
+                "before": {},
+                "plan": {},
+                "changed": False,
+                "applied": False,
+                "verdict": PresetVerdict.UNSUPPORTED_MODEL,
+                "reason": (
+                    "No visitor-intercom preset adapter is registered for "
+                    f"{model or 'unknown model'}."
+                ),
+            }
 
         cfg = await self.get_config(refresh=True)
         wants = x916_visitor_config(requested)
-        require_x916_visitor_surface(cfg, wants)
+        try:
+            require_x916_visitor_surface(cfg, wants)
+        except DeviceError as exc:
+            return {
+                "before": {},
+                "plan": {},
+                "changed": False,
+                "applied": False,
+                "verdict": PresetVerdict.UNSUPPORTED_FIRMWARE,
+                "reason": str(exc),
+            }
         diff = {key: want for key, want in wants.items() if str(cfg.get(key)) != want}
         before = {key: str(cfg.get(key, "")) for key in wants}
         plan = {key: f"{before[key]!r} -> {want!r}" for key, want in diff.items()}
@@ -364,7 +383,7 @@ class AkuvoxDevice:
                 "plan": {},
                 "changed": False,
                 "applied": False,
-                "verdict": SetVerdict.ALREADY_SET,
+                "verdict": PresetVerdict.ALREADY_SET,
                 "after": before,
             }
         if not apply:
@@ -373,7 +392,7 @@ class AkuvoxDevice:
                 "plan": plan,
                 "changed": True,
                 "applied": False,
-                "verdict": SetVerdict.WOULD_CHANGE,
+                "verdict": PresetVerdict.WOULD_CHANGE,
             }
 
         await self.set_config(diff)
@@ -386,7 +405,9 @@ class AkuvoxDevice:
             "changed": True,
             "applied": True,
             "verdict": (
-                SetVerdict.SET_VERIFIED if verified else SetVerdict.SET_DID_NOT_STICK
+                PresetVerdict.SET_VERIFIED
+                if verified
+                else PresetVerdict.SET_DID_NOT_STICK
             ),
             "after": after,
         }

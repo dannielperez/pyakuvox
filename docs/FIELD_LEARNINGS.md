@@ -43,7 +43,9 @@ devices can lose unsaved config on power loss).
 - Residential relay baseline: A-D are monostable/default-state, trigger delay
   `0`, hold delay `5`, with unique sequential codes `6`, `7`, `8`, `9`.
 - Use `AkuvoxDevice.ensure_visitor_intercom_preset(..., apply=True)`. It refuses
-  non-X916 devices or missing fields and verifies the full readback after one write.
+  to guess fields, verifies the full readback after one write, and returns
+  `unsupported-model` or `unsupported-firmware` as a non-mutating typed outcome
+  when a model adapter or audited field map is not available.
 
 ## TODO / improvements
 - **SPA-firmware web-UI client (HIGH):** newer firmware replaced the `/fcgi/do` nonce flow with a

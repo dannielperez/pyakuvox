@@ -47,7 +47,9 @@ from pyakuvox.rtsp import RTSPStreamConfig, build_rtsp_url
 from pyakuvox.security import CredentialRisk, SecuritySnapshot, UserAccountSummary
 from pyakuvox.visitor import (
     RESIDENTIAL_VISITOR_INTERCOM_PRESET,
+    PresetVerdict,
     VisitorIntercomPreset,
+    VisitorPresetResult,
 )
 
 if TYPE_CHECKING:
@@ -156,6 +158,7 @@ __all__ = [
     "LocalSettings",
     "NetworkConfig",
     "ParseError",
+    "PresetVerdict",
     "RTSPFrame",
     "RTSPStreamConfig",
     "RelayState",
@@ -170,6 +173,7 @@ __all__ = [
     "UnsupportedFeatureError",
     "UserAccountSummary",
     "VisitorIntercomPreset",
+    "VisitorPresetResult",
     "WebUIClient",
     "build_config_set_payload",
     "build_rtsp_url",

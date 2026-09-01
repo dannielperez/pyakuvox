@@ -8,11 +8,35 @@ has the audited X916 configuration surface.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from enum import StrEnum
+from typing import Any, NotRequired, TypedDict
 
 from pyakuvox.exceptions import DeviceError
 
 RESIDENTIAL_VISITOR_INTERCOM_PRESET = "residential_visitor_intercom_v1"
+
+
+class PresetVerdict(StrEnum):
+    """Typed outcomes for model-specific preset application."""
+
+    WOULD_CHANGE = "would-change"
+    ALREADY_SET = "already-set"
+    SET_VERIFIED = "set-verified"
+    SET_DID_NOT_STICK = "set-did-not-stick"
+    UNSUPPORTED_MODEL = "unsupported-model"
+    UNSUPPORTED_FIRMWARE = "unsupported-firmware"
+
+
+class VisitorPresetResult(TypedDict):
+    """Result that separates unsupported capability from mutation failure."""
+
+    before: dict[str, str]
+    plan: dict[str, str]
+    changed: bool
+    applied: bool
+    verdict: PresetVerdict
+    after: NotRequired[dict[str, str]]
+    reason: NotRequired[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,7 +119,9 @@ def require_x916_visitor_surface(config: dict[str, Any], wants: dict[str, str]) 
 
 __all__ = [
     "RESIDENTIAL_VISITOR_INTERCOM_PRESET",
+    "PresetVerdict",
     "VisitorIntercomPreset",
+    "VisitorPresetResult",
     "require_x916_visitor_surface",
     "x916_visitor_config",
 ]
