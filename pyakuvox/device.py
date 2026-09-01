@@ -605,9 +605,11 @@ class AkuvoxDevice:
 
         Result dictionaries never contain the current or requested password.
         Default is a dry-run plan. ``apply=True`` writes and re-reads the full
-        account, returning ``set-verified`` only when every requested value
-        persisted. E18C single-account writes remain unsupported because that
-        dialect requires the keyed ``/web`` edit envelope.
+        account, returning ``set-verified`` when every readable requested value
+        persisted. Password fields are write-only on some firmware and are
+        verified end-to-end by SIP registration. E18C single-account writes
+        remain unsupported because that dialect requires the keyed ``/web``
+        edit envelope.
         """
         validate_sip_password(password)
         transport_name = transport.strip().lower()
@@ -670,7 +672,11 @@ class AkuvoxDevice:
 
         await self.set_config(diff)
         after_cfg = await self.get_config()
-        verified = all(str(after_cfg.get(keys[name], "")) == want for name, want in wants.items())
+        verified = all(
+            str(after_cfg.get(keys[name], "")) == want
+            for name, want in wants.items()
+            if name != "password"
+        )
         after = {name: after_cfg.get(keys[name]) for name in wants if name != "password"}
         after["password_set"] = bool(after_cfg.get(keys["password"]))
         return {
