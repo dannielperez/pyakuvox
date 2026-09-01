@@ -33,6 +33,18 @@ by default, the real cause of slow failover; set to **30**).
 Dual-server = explicit internal-primary + public-failover. **Reboot after any change** (these
 devices can lose unsaved config on power loss).
 
+## X916 residential visitor preset (916.30.10.357 verified)
+- Intercom theme / Homepage: `Config.DoorSetting.GENERAL.Theme=2` and
+  `BuildingDisplayType=0`.
+- Homepage key types: `5=Speed Dial`, `2=PIN`, `6=Null`. The Unique baseline is
+  six slots: `Centro/Guard` → `99`, PIN, then four Null slots.
+- Relay control: `DTMF.Enable=1`, `DTMF.Option=0` is one-digit DTMF, and
+  `DTMF.DtmfWhitelist=2` is **All Numbers**.
+- Residential relay baseline: A-D are monostable/default-state, trigger delay
+  `0`, hold delay `5`, with unique sequential codes `6`, `7`, `8`, `9`.
+- Use `AkuvoxDevice.ensure_visitor_intercom_preset(..., apply=True)`. It refuses
+  non-X916 devices or missing fields and verifies the full readback after one write.
+
 ## TODO / improvements
 - **SPA-firmware web-UI client (HIGH):** newer firmware replaced the `/fcgi/do` nonce flow with a
   modern SPA — `WebUIClient.login()` fails with "Failed to get encryption nonce". A meaningful share

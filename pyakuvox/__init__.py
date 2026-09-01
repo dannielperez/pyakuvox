@@ -45,6 +45,10 @@ from pyakuvox.network import (
 )
 from pyakuvox.rtsp import RTSPStreamConfig, build_rtsp_url
 from pyakuvox.security import CredentialRisk, SecuritySnapshot, UserAccountSummary
+from pyakuvox.visitor import (
+    RESIDENTIAL_VISITOR_INTERCOM_PRESET,
+    VisitorIntercomPreset,
+)
 
 if TYPE_CHECKING:
     from pyakuvox.clients.local.client import LocalClient
@@ -125,6 +129,7 @@ else:
 
 __all__ = [
     "DOCUMENTED_MJPEG_SNAPSHOT_PATHS",
+    "RESIDENTIAL_VISITOR_INTERCOM_PRESET",
     "SIP_PASSWORD_FORBIDDEN_CHARACTERS",
     "SIP_PASSWORD_MAX_LENGTH",
     "AkuvoxDevice",
@@ -164,6 +169,7 @@ __all__ = [
     "UnsupportedDialectError",
     "UnsupportedFeatureError",
     "UserAccountSummary",
+    "VisitorIntercomPreset",
     "WebUIClient",
     "build_config_set_payload",
     "build_rtsp_url",

@@ -323,6 +323,74 @@ class AkuvoxDevice:
     async def reboot(self) -> bool:
         return await self._ensure_client().reboot()
 
+    async def ensure_visitor_intercom_preset(
+        self,
+        preset: str = "residential_visitor_intercom_v1",
+        *,
+        apply: bool = False,
+    ) -> SetResult:
+        """Apply and verify the audited X916 visitor homepage and relays.
+
+        The caller selects a vendor-neutral preset name.  This method verifies
+        both device model and field availability before dispatching one write,
+        then re-reads every required value.  It never guesses field names for
+        another model or firmware generation.
+        """
+        from pyakuvox.visitor import (
+            VisitorIntercomPreset,
+            require_x916_visitor_surface,
+            x916_visitor_config,
+        )
+
+        requested = VisitorIntercomPreset(name=preset)
+        info = await self.info()
+        model = str(getattr(getattr(info, "identity", None), "model", "")).upper()
+        if model != "X916":
+            raise DeviceError(
+                f"visitor-intercom preset {preset!r} is supported only on X916, "
+                f"got {model or 'unknown'}"
+            )
+
+        cfg = await self.get_config(refresh=True)
+        wants = x916_visitor_config(requested)
+        require_x916_visitor_surface(cfg, wants)
+        diff = {key: want for key, want in wants.items() if str(cfg.get(key)) != want}
+        before = {key: str(cfg.get(key, "")) for key in wants}
+        plan = {key: f"{before[key]!r} -> {want!r}" for key, want in diff.items()}
+
+        if not diff:
+            return {
+                "before": before,
+                "plan": {},
+                "changed": False,
+                "applied": False,
+                "verdict": SetVerdict.ALREADY_SET,
+                "after": before,
+            }
+        if not apply:
+            return {
+                "before": before,
+                "plan": plan,
+                "changed": True,
+                "applied": False,
+                "verdict": SetVerdict.WOULD_CHANGE,
+            }
+
+        await self.set_config(diff)
+        after_cfg = await self.get_config(refresh=True)
+        after = {key: str(after_cfg.get(key, "")) for key in wants}
+        verified = all(after[key] == want for key, want in wants.items())
+        return {
+            "before": before,
+            "plan": plan,
+            "changed": True,
+            "applied": True,
+            "verdict": (
+                SetVerdict.SET_VERIFIED if verified else SetVerdict.SET_DID_NOT_STICK
+            ),
+            "after": after,
+        }
+
     async def rotate_access_media_credentials(
         self,
         username: str,
