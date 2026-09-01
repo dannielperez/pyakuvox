@@ -168,17 +168,39 @@ async def _flip_fcgi(
     order = [ConfigPasswordEncoding.R29C, ConfigPasswordEncoding.X916]
     if dialect_for_model(model) is ApiDialect.FCGI_WEB or (model or "").upper().startswith("X916"):
         order = [ConfigPasswordEncoding.X916, ConfigPasswordEncoding.R29C]
+    endpoints = (
+        {"port": 80, "use_ssl": False},
+        {"port": 443, "use_ssl": True},
+    )
     for enc in order:
-        try:
-            async with WebUIClient(host, timeout=timeout, password_encoding=enc) as ui:
-                await ui.login(web_user, web_pass)
-                cfg = await ui.enable_api_access(api_user, api_pass, auth_mode)
-        except AkuvoxError as exc:
-            logger.debug("fcgi_flip_attempt_failed", host=host, encoding=enc.value, error=str(exc))
-            continue
-        verified, endpoint = await _verify(host, api_user, api_pass, auth_mode, cfg)
-        if verified:
-            return enc.value, endpoint
+        for endpoint_settings in endpoints:
+            try:
+                async with WebUIClient(
+                    host,
+                    timeout=timeout,
+                    password_encoding=enc,
+                    **endpoint_settings,
+                ) as ui:
+                    await ui.login(web_user, web_pass)
+                    cfg = await ui.enable_api_access(api_user, api_pass, auth_mode)
+            except AkuvoxError as exc:
+                logger.debug(
+                    "fcgi_flip_attempt_failed",
+                    host=host,
+                    encoding=enc.value,
+                    port=endpoint_settings["port"],
+                    error=str(exc),
+                )
+                continue
+            verified, endpoint = await _verify(
+                host,
+                api_user,
+                api_pass,
+                auth_mode,
+                cfg,
+            )
+            if verified:
+                return enc.value, endpoint
     return "", None
 
 

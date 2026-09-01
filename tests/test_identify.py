@@ -96,6 +96,26 @@ def test_web_api_308_then_model():
     assert not ident.headless_manageable
 
 
+def test_https_fcgi_308_is_not_misclassified_as_spa():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/system/info":
+            return httpx.Response(308, headers={"location": "/"})
+        if request.url.path == "/api/web/system/info":
+            return httpx.Response(403)
+        if (
+            request.url.scheme == "https"
+            and request.url.path == "/fcgi/do"
+            and request.url.params.get("action") == "Encrypt"
+        ):
+            return httpx.Response(200, text="<input value='0123456789abcdef'>")
+        return httpx.Response(404)
+
+    ident = _run(identify("192.0.2.30", transport=_transport(handler)))
+
+    assert ident.dialect == ApiDialect.FCGI_WEB
+    assert "HTTPS FCGI" in ident.note
+
+
 def test_legacy_e18c_403_then_productname():
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/system/info":
