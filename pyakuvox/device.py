@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from pyakuvox.models.device import DeviceInfo
     from pyakuvox.models.users import UserCode
     from pyakuvox.security import SecuritySnapshot
+    from pyakuvox.visitor import VisitorPresetResult
 
 logger = structlog.get_logger(__name__)
 
@@ -322,6 +323,94 @@ class AkuvoxDevice:
 
     async def reboot(self) -> bool:
         return await self._ensure_client().reboot()
+
+    async def ensure_visitor_intercom_preset(
+        self,
+        preset: str = "residential_visitor_intercom_v1",
+        *,
+        apply: bool = False,
+    ) -> VisitorPresetResult:
+        """Apply and verify the audited X916 visitor homepage and relays.
+
+        The caller selects a vendor-neutral preset name.  This method verifies
+        both device model and field availability before dispatching one write,
+        then re-reads every required value.  It never guesses field names for
+        another model or firmware generation.
+        """
+        from pyakuvox.visitor import (
+            PresetVerdict,
+            VisitorIntercomPreset,
+            visitor_preset_adapter,
+        )
+
+        requested = VisitorIntercomPreset(name=preset)
+        info = await self.info()
+        model = str(getattr(getattr(info, "identity", None), "model", "")).upper()
+        adapter = visitor_preset_adapter(model)
+        if adapter is None:
+            return {
+                "before": {},
+                "plan": {},
+                "changed": False,
+                "applied": False,
+                "verdict": PresetVerdict.UNSUPPORTED_MODEL,
+                "reason": (
+                    "No visitor-intercom preset adapter is registered for "
+                    f"{model or 'unknown model'}."
+                ),
+            }
+
+        cfg = await self.get_config(refresh=True)
+        wants = adapter.build_config(requested)
+        try:
+            adapter.validate_surface(cfg, wants)
+        except DeviceError as exc:
+            return {
+                "before": {},
+                "plan": {},
+                "changed": False,
+                "applied": False,
+                "verdict": PresetVerdict.UNSUPPORTED_FIRMWARE,
+                "reason": str(exc),
+            }
+        diff = {key: want for key, want in wants.items() if str(cfg.get(key)) != want}
+        before = {key: str(cfg.get(key, "")) for key in wants}
+        plan = {key: f"{before[key]!r} -> {want!r}" for key, want in diff.items()}
+
+        if not diff:
+            return {
+                "before": before,
+                "plan": {},
+                "changed": False,
+                "applied": False,
+                "verdict": PresetVerdict.ALREADY_SET,
+                "after": before,
+            }
+        if not apply:
+            return {
+                "before": before,
+                "plan": plan,
+                "changed": True,
+                "applied": False,
+                "verdict": PresetVerdict.WOULD_CHANGE,
+            }
+
+        await self.set_config(diff)
+        after_cfg = await self.get_config(refresh=True)
+        after = {key: str(after_cfg.get(key, "")) for key in wants}
+        verified = all(after[key] == want for key, want in wants.items())
+        return {
+            "before": before,
+            "plan": plan,
+            "changed": True,
+            "applied": True,
+            "verdict": (
+                PresetVerdict.SET_VERIFIED
+                if verified
+                else PresetVerdict.SET_DID_NOT_STICK
+            ),
+            "after": after,
+        }
 
     async def rotate_access_media_credentials(
         self,
