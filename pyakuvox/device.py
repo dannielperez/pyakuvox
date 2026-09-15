@@ -29,19 +29,23 @@ once an E18C's HTTP API is flipped to Digest it connects normally.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Collection  # noqa: TC003 - public hints are resolved at runtime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, NotRequired, Protocol, TypedDict
 
 import structlog
 
 from pyakuvox.config import LocalAuthType, LocalSettings
-from pyakuvox.exceptions import AmbiguousMutationError, DeviceError, UnsupportedDialectError
+from pyakuvox.exceptions import (
+    AmbiguousMutationError,
+    DeviceError,
+    OccupiedSipAccountError,
+    UnsupportedDialectError,
+)
 from pyakuvox.exceptions import TimeoutError as AkuvoxTimeoutError
 from pyakuvox.identify import ApiDialect, DeviceIdentity, identify
 
 if TYPE_CHECKING:
-    from collections.abc import Collection
-
     from pyakuvox.intercom import IntercomConfiguration, IntercomConfigurationResult
     from pyakuvox.models.device import DeviceInfo
     from pyakuvox.models.users import UserCode
@@ -59,6 +63,16 @@ _SIP_TRANSPORT_CODES = {
 }
 SIP_PASSWORD_MAX_LENGTH = 63
 SIP_PASSWORD_FORBIDDEN_CHARACTERS = frozenset({"&", "%", "'", "="})
+
+
+def _normalized_registrar(value: object) -> str:
+    registrar = str(value or "").strip().casefold()
+    if "://" in registrar:
+        registrar = registrar.split("://", 1)[1]
+    registrar = registrar.split("/", 1)[0].rstrip(".")
+    if registrar.count(":") == 1:
+        registrar = registrar.split(":", 1)[0]
+    return registrar
 
 
 def validate_sip_password(password: str) -> None:
@@ -697,6 +711,7 @@ class AkuvoxDevice:
         registration_period: int | None = None,
         display_name: str | None = None,
         apply: bool = False,
+        allowed_existing_registrars: Collection[str] | None = None,
     ) -> SetResult:
         """Configure and verify one complete SIP registration account.
 
@@ -726,6 +741,20 @@ class AkuvoxDevice:
 
         cfg = await self.get_config()
         keys = self._resolve_account_keys(cfg, account)
+        if allowed_existing_registrars is not None:
+            current_registrar = _normalized_registrar(cfg.get(keys["server"]))
+            current_identity = str(
+                cfg.get(keys["username"]) or cfg.get(keys["auth_name"]) or ""
+            ).strip()
+            allowed = {
+                normalized
+                for value in allowed_existing_registrars
+                if (normalized := _normalized_registrar(value))
+            }
+            if (current_registrar or current_identity) and current_registrar not in allowed:
+                raise OccupiedSipAccountError(
+                    f"SIP account {account} uses an unrecognized registrar"
+                )
         wants = {
             "enable": "1",
             "server": str(server),

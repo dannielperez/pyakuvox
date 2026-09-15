@@ -88,6 +88,10 @@ class DeviceError(AkuvoxError):
     """The device returned an error or unexpected response."""
 
 
+class OccupiedSipAccountError(DeviceError):
+    """The selected account is populated by an unrecognized SIP registrar."""
+
+
 class ParseError(AkuvoxError):
     """Could not parse the device/cloud response into a model."""
 
