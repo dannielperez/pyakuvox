@@ -17,7 +17,11 @@ from pyakuvox.device import (
     SetResult,
     SetVerdict,
 )
-from pyakuvox.exceptions import AmbiguousMutationError, UnsupportedDialectError
+from pyakuvox.exceptions import (
+    AmbiguousMutationError,
+    OccupiedSipAccountError,
+    UnsupportedDialectError,
+)
 from pyakuvox.exceptions import TimeoutError as AkuvoxTimeoutError
 from pyakuvox.identify import ApiDialect, DeviceIdentity
 
@@ -567,6 +571,41 @@ def test_set_sip_account_apply_writes_canonical_keys_and_verifies():
             "Config.Account2.GENERAL.Label": "1001_Lobby",
         }
     ]
+
+
+def test_set_sip_account_refuses_unrecognized_populated_registrar_before_write():
+    dev = _device(_multi_account_config())
+
+    with pytest.raises(OccupiedSipAccountError, match="unrecognized registrar"):
+        _run(
+            dev.set_sip_account(
+                2,
+                server=PRIMARY,
+                username="1001",
+                password="new-secret",
+                apply=True,
+                allowed_existing_registrars=(PRIMARY,),
+            )
+        )
+
+    assert dev._client.sets == []
+
+
+def test_set_sip_account_allows_normalized_recognized_registrar():
+    dev = _device(_multi_account_config(**{"Config.Account2.SIP.Server": f"SIP://{PRIMARY}:5060"}))
+
+    result = _run(
+        dev.set_sip_account(
+            2,
+            server=PRIMARY,
+            username="1001",
+            password="new-secret",
+            apply=True,
+            allowed_existing_registrars=(PRIMARY,),
+        )
+    )
+
+    assert result["verdict"] == "set-verified"
 
 
 def test_set_sip_account_result_never_discloses_password():
