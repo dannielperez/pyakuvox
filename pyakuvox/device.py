@@ -630,6 +630,7 @@ class AkuvoxDevice:
                 "port": f"{base}.SIP.Port",
                 "transport": f"{base}.SIP.TransType",
                 "enable": f"{base}.GENERAL.Enable",
+                "display_name": f"{base}.GENERAL.Label",
                 "username": f"{base}.GENERAL.UserName",
                 "auth_name": f"{base}.GENERAL.AuthName",
                 "password": f"{base}.GENERAL.Pwd",
@@ -643,6 +644,7 @@ class AkuvoxDevice:
                 "port": "Config.Account.SIP.Port",
                 "transport": "Config.Account.SIP.TransType",
                 "enable": "Config.Account.GENERAL.Enable",
+                "display_name": "Config.Account.GENERAL.Label",
                 "username": "Config.Account.GENERAL.UserName",
                 "auth_name": "Config.Account.GENERAL.AuthName",
                 "password": "Config.Account.GENERAL.Pwd",
@@ -674,6 +676,7 @@ class AkuvoxDevice:
             "transport": cfg.get(keys["transport"]),
             "enable": cfg.get(keys["enable"]),
             "enabled": str(cfg.get(keys["enable"])) in ("1", "true", "True"),
+            "display_name": cfg.get(keys["display_name"]),
             "username": cfg.get(keys["username"]),
             "auth_name": cfg.get(keys["auth_name"]),
             "has_fallback": bool(server2),
@@ -692,6 +695,7 @@ class AkuvoxDevice:
         port: int | str = 5060,
         transport: str = "udp",
         registration_period: int | None = None,
+        display_name: str | None = None,
         apply: bool = False,
     ) -> SetResult:
         """Configure and verify one complete SIP registration account.
@@ -731,6 +735,8 @@ class AkuvoxDevice:
             "auth_name": str(username),
             "password": str(password),
         }
+        if display_name is not None:
+            wants["display_name"] = str(display_name)
         if registration_period is not None:
             wants["reg_timeout"] = str(registration_period)
             wants["reg_timeout2"] = str(registration_period)
