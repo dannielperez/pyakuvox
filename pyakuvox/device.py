@@ -29,6 +29,7 @@ once an E18C's HTTP API is flipped to Digest it connects normally.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Collection  # noqa: TC003 - public hints are resolved at runtime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, NotRequired, Protocol, TypedDict
 
@@ -45,8 +46,6 @@ from pyakuvox.exceptions import TimeoutError as AkuvoxTimeoutError
 from pyakuvox.identify import ApiDialect, DeviceIdentity, identify
 
 if TYPE_CHECKING:
-    from collections.abc import Collection
-
     from pyakuvox.intercom import IntercomConfiguration, IntercomConfigurationResult
     from pyakuvox.models.device import DeviceInfo
     from pyakuvox.models.users import UserCode
