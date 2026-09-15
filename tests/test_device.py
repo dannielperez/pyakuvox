@@ -469,6 +469,7 @@ def _multi_account_config(**overrides) -> dict:
         "Config.Account2.SIP.Port": "5060",
         "Config.Account2.SIP.TransType": "0",
         "Config.Account2.GENERAL.Enable": "1",
+        "Config.Account2.GENERAL.Label": "Old label",
         "Config.Account2.GENERAL.UserName": "old-user",
         "Config.Account2.GENERAL.AuthName": "old-user",
         "Config.Account2.GENERAL.Pwd": "old-password",
@@ -548,6 +549,7 @@ def test_set_sip_account_apply_writes_canonical_keys_and_verifies():
             password="new-secret",
             port=5070,
             transport="tcp",
+            display_name="1001_Lobby",
             apply=True,
         )
     )
@@ -562,6 +564,7 @@ def test_set_sip_account_apply_writes_canonical_keys_and_verifies():
             "Config.Account2.GENERAL.UserName": "1001",
             "Config.Account2.GENERAL.AuthName": "1001",
             "Config.Account2.GENERAL.Pwd": "new-secret",
+            "Config.Account2.GENERAL.Label": "1001_Lobby",
         }
     ]
 
