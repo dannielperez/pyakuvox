@@ -712,6 +712,7 @@ class AkuvoxDevice:
         display_name: str | None = None,
         apply: bool = False,
         allowed_existing_registrars: Collection[str] | None = None,
+        allowed_existing_identities: Collection[str] | None = None,
     ) -> SetResult:
         """Configure and verify one complete SIP registration account.
 
@@ -755,6 +756,18 @@ class AkuvoxDevice:
                 raise OccupiedSipAccountError(
                     f"SIP account {account} uses an unrecognized registrar"
                 )
+        if allowed_existing_identities is not None:
+            current_identity = str(
+                cfg.get(keys["username"]) or cfg.get(keys["auth_name"]) or ""
+            ).strip()
+            allowed_identities = {
+                str(value).strip() for value in allowed_existing_identities if str(value).strip()
+            }
+            current_registrar = _normalized_registrar(cfg.get(keys["server"]))
+            if (
+                current_registrar or current_identity
+            ) and current_identity not in allowed_identities:
+                raise OccupiedSipAccountError(f"SIP account {account} uses an unexpected identity")
         wants = {
             "enable": "1",
             "server": str(server),
