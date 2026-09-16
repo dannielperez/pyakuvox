@@ -660,6 +660,32 @@ def test_set_sip_account_allows_expected_identity():
     assert result["verdict"] == "set-verified"
 
 
+def test_set_sip_account_allows_an_explicit_prior_identity():
+    dev = _device(
+        _multi_account_config(
+            **{
+                "Config.Account2.SIP.Server": PRIMARY,
+                "Config.Account2.GENERAL.UserName": "1000",
+                "Config.Account2.GENERAL.AuthName": "1000",
+            }
+        )
+    )
+
+    result = _run(
+        dev.set_sip_account(
+            2,
+            server=PRIMARY,
+            username="1001",
+            password="new-secret",
+            apply=True,
+            allowed_existing_registrars=(PRIMARY,),
+            allowed_existing_identities=("1001", "1000"),
+        )
+    )
+
+    assert result["verdict"] == "set-verified"
+
+
 def test_set_sip_account_result_never_discloses_password():
     dev = _device(_multi_account_config())
 
