@@ -39,7 +39,7 @@ from pyakuvox.clients.local.webui import (
     HttpApiConfig,
     WebUIClient,
 )
-from pyakuvox.exceptions import AkuvoxError
+from pyakuvox.exceptions import AkuvoxError, AmbiguousMutationError
 from pyakuvox.identify import ApiDialect, identify, profile_for_model
 
 logger = structlog.get_logger(__name__)
@@ -186,6 +186,8 @@ async def _flip_fcgi(
                 ) as ui:
                     await ui.login(web_user, web_pass)
                     cfg = await ui.enable_api_access(api_user, api_pass, auth_mode)
+            except AmbiguousMutationError:
+                raise
             except AkuvoxError as exc:
                 logger.debug(
                     "fcgi_flip_attempt_failed",
@@ -286,6 +288,10 @@ async def enable_api(
                 model or "",
                 timeout,
             )
+        except AmbiguousMutationError:
+            res.verdict = "ambiguous-write"
+            res.error = "Configuration write outcome unknown; inspect before retrying."
+            return res
         except AkuvoxError as exc:
             last_err = f"{type(exc).__name__}: {exc}"
             logger.debug("flip_path_error", host=host, path=path.__name__, error=last_err)
