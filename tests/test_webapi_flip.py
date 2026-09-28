@@ -104,9 +104,7 @@ async def test_fcgi_login_uses_aes_when_https_page_advertises_it():
             _resp(text="<input id=hcSingleResult value='NONCE'>"),
         ]
     )
-    mock.post = AsyncMock(
-        return_value=_resp(text="<input id=hcSessionIdNow value='SESSION'>")
-    )
+    mock.post = AsyncMock(return_value=_resp(text="<input id=hcSessionIdNow value='SESSION'>"))
 
     with patch(
         "pyakuvox.clients.local.webui.encode_login_password_aes",
@@ -132,9 +130,7 @@ async def test_fcgi_login_retains_legacy_encoding_when_aes_is_absent():
             _resp(text="<input id=hcSingleResult value='NONCE'>"),
         ]
     )
-    mock.post = AsyncMock(
-        return_value=_resp(text="<input id=hcSessionIdNow value='SESSION'>")
-    )
+    mock.post = AsyncMock(return_value=_resp(text="<input id=hcSessionIdNow value='SESSION'>"))
 
     async with WebUIClient("1.2.3.4") as web:
         web._client = mock
@@ -471,3 +467,78 @@ async def test_enable_api_fcgi_not_verified_reports_failure():
 def test_flipresult_defaults():
     r = FlipResult(host="x")
     assert r.ok is False and r.dialect is ApiDialect.UNKNOWN
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [httpx.ReadTimeout, httpx.RemoteProtocolError])
+async def test_fcgi_login_transport_errors_use_sdk_contract(error):
+    from pyakuvox.exceptions import ConnectionError
+
+    async with WebUIClient("192.0.2.10", port=443, use_ssl=True) as web:
+        web._client = AsyncMock()
+        web._client.get.side_effect = error("sensitive transport detail")
+        with pytest.raises(ConnectionError) as raised:
+            await web.login("admin", "test-password")
+        assert error.__name__ in str(raised.value)
+        assert "sensitive" not in str(raised.value)
+        web._client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_fcgi_config_write_timeout_is_ambiguous_and_not_retried():
+    from pyakuvox.exceptions import AmbiguousMutationError
+
+    async with WebUIClient("192.0.2.10", port=443, use_ssl=True) as web:
+        web._session_id = "test-session"
+        web._client = AsyncMock()
+        web._client.post.side_effect = httpx.ReadTimeout("sensitive transport detail")
+        with pytest.raises(AmbiguousMutationError) as raised:
+            await web.enable_api_access("admin", "test-password")
+        assert "sensitive" not in str(raised.value)
+        assert web._client.post.await_count == 1
+        web._client.get.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_fcgi_write_stops_encoding_and_dialect_retries():
+    from pyakuvox.exceptions import AmbiguousMutationError
+
+    ident = DeviceIdentity(
+        host="192.0.2.10", reachable=True, dialect=ApiDialect.DIGEST_API, model="X916S"
+    )
+    web = AsyncMock()
+    web.enable_api_access.side_effect = AmbiguousMutationError("unconfirmed")
+    manager = AsyncMock()
+    manager.__aenter__.return_value = web
+    with (
+        patch.object(flip_mod, "_probe_digest_endpoint", AsyncMock(return_value=None)),
+        patch.object(flip_mod, "identify", AsyncMock(return_value=ident)),
+        patch.object(flip_mod, "WebUIClient", return_value=manager) as factory,
+        patch.object(flip_mod, "_flip_webapi", AsyncMock()) as spa,
+    ):
+        result = await enable_api_digest(
+            "192.0.2.10",
+            web_user="admin",
+            web_pass="web-test",
+            api_user="admin",
+            api_pass="api-test",
+        )
+    assert not result.ok
+    assert result.verdict == "ambiguous-write"
+    assert factory.call_count == 1
+    assert web.enable_api_access.await_count == 1
+    spa.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_fcgi_readback_timeout_does_not_allow_another_write():
+    from pyakuvox.exceptions import AmbiguousMutationError
+
+    async with WebUIClient("192.0.2.10", port=443, use_ssl=True) as web:
+        web._session_id = "test-session"
+        web._client = AsyncMock()
+        web._client.post.return_value = _resp()
+        web._client.get.side_effect = httpx.ReadTimeout("sensitive transport detail")
+        with pytest.raises(AmbiguousMutationError, match="readback"):
+            await web.enable_api_access("admin", "test-password")
+        assert web._client.post.await_count == 1

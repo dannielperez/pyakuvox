@@ -39,7 +39,12 @@ from pyakuvox.clients.local.encoding import (
     encode_login_password_aes,
     post_encode,
 )
-from pyakuvox.exceptions import AuthenticationError, ConnectionError, DeviceError
+from pyakuvox.exceptions import (
+    AmbiguousMutationError,
+    AuthenticationError,
+    ConnectionError,
+    DeviceError,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -56,8 +61,8 @@ class ConfigPasswordEncoding(StrEnum):
     let :func:`pyakuvox.clients.local.flip.enable_api_digest` try and verify both.
     """
 
-    X916 = "x916"   # post_encode(base64(pw))
-    R29C = "r29c"   # post_encode(raw)  — also plain R29
+    X916 = "x916"  # post_encode(base64(pw))
+    R29C = "r29c"  # post_encode(raw)  — also plain R29
 
 
 class FirmwareAuthMode(IntEnum):
@@ -165,14 +170,18 @@ class WebUIClient:
 
     def _ensure_client(self) -> httpx.AsyncClient:
         if not self._client:
-            raise ConnectionError(
-                "WebUIClient not initialized — use 'async with' context manager"
-            )
+            raise ConnectionError("WebUIClient not initialized — use 'async with' context manager")
         return self._client
 
     def _ensure_session(self) -> None:
         if not self._session_id:
             raise AuthenticationError("Not logged in — call login() first")
+
+    async def _get(self, url: str) -> httpx.Response:
+        try:
+            return await self._ensure_client().get(url)
+        except httpx.HTTPError as exc:
+            raise ConnectionError(f"FCGI read failed ({type(exc).__name__})") from exc
 
     # ── Login ───────────────────────────────────────────────────────
 
@@ -191,17 +200,12 @@ class WebUIClient:
         # Newer FCGI firmware advertises CryptoJS AES on its login page. Detect
         # it rather than trying both encodings, since failed attempts can count
         # toward a device lockout.
-        try:
-            login_page = await client.get(f"{self.base_url}/fcgi/do?id=1")
-            resp = await client.get(f"{self.base_url}/fcgi/do?action=Encrypt")
-        except httpx.ConnectError as exc:
-            raise ConnectionError(f"Cannot reach {self._host}: {exc}") from exc
+        login_page = await self._get(f"{self.base_url}/fcgi/do?id=1")
+        resp = await self._get(f"{self.base_url}/fcgi/do?action=Encrypt")
 
         match = re.search(r"value='([^']*)'", resp.text)
         if not match or not match.group(1):
-            raise AuthenticationError(
-                f"Failed to get encryption nonce from {self._host}"
-            )
+            raise AuthenticationError(f"Failed to get encryption nonce from {self._host}")
         nonce = match.group(1)
         log.debug("webui_nonce_received", nonce_len=len(nonce))
 
@@ -226,10 +230,15 @@ class WebUIClient:
             f"&Password={encoded_password}"
             f"&SubmitData=end"
         )
-        resp = await client.post(
-            f"{self.base_url}/fcgi/do?id=1",
-            data={"SubmitData": submit_data},
-        )
+        try:
+            resp = await client.post(
+                f"{self.base_url}/fcgi/do?id=1",
+                data={"SubmitData": submit_data},
+            )
+        except httpx.HTTPError as exc:
+            raise ConnectionError(
+                f"FCGI login response unavailable ({type(exc).__name__})"
+            ) from exc
 
         session_match = re.search(r"hcSessionIdNow.*?value='([^']*)'", resp.text)
         if not session_match or not session_match.group(1):
@@ -249,14 +258,11 @@ class WebUIClient:
 
         Returns a dict of field_name → value from the HTML hidden inputs.
         """
-        client = self._ensure_client()
         self._ensure_session()
 
-        resp = await client.get(f"{self.base_url}/fcgi/do?{page_id}")
+        resp = await self._get(f"{self.base_url}/fcgi/do?{page_id}")
         fields: dict[str, str] = {}
-        for match in re.finditer(
-            r"id=(hc\w+)\s+type=hidden\s+value='([^']*)'", resp.text
-        ):
+        for match in re.finditer(r"id=(hc\w+)\s+type=hidden\s+value='([^']*)'", resp.text):
             fields[match.group(1)] = match.group(2)
         return fields
 
@@ -268,10 +274,17 @@ class WebUIClient:
         client = self._ensure_client()
         self._ensure_session()
 
-        resp = await client.post(
-            f"{self.base_url}/fcgi/do?{page_id}",
-            data={"SubmitData": submit_data},
-        )
+        try:
+            resp = await client.post(
+                f"{self.base_url}/fcgi/do?{page_id}",
+                data={"SubmitData": submit_data},
+            )
+        except httpx.HTTPError as exc:
+            # The panel may have committed the change before the response was
+            # lost. A different encoding must not be written as an automatic retry.
+            raise AmbiguousMutationError(
+                f"FCGI config write outcome unknown ({type(exc).__name__})"
+            ) from exc
         return resp.status_code
 
     # ── HTTP API config ─────────────────────────────────────────────
@@ -284,7 +297,7 @@ class WebUIClient:
         """
         self._ensure_session()
         fields = await self._read_page(_HTTP_API_CONFIG_PAGE)
-        logger.debug("webui_config_read", host=self._host, fields=fields)
+        logger.debug("webui_config_read", host=self._host, field_names=sorted(fields))
 
         # Parse whitelist IPs (hcIP_01 through hcIP_05)
         ips: list[str] = []
@@ -394,12 +407,15 @@ class WebUIClient:
 
         status = await self._write_page(_HTTP_API_CONFIG_PAGE, submit_data)
         if status >= 400:
-            raise DeviceError(
-                f"Config submission failed with HTTP {status} on {self._host}"
-            )
+            raise DeviceError(f"Config submission failed with HTTP {status} on {self._host}")
 
         log.info("webui_config_updated", host=self._host)
-        return await self.get_http_api_config()
+        try:
+            return await self.get_http_api_config()
+        except ConnectionError as exc:
+            raise AmbiguousMutationError(
+                "FCGI config write completed but readback is unavailable"
+            ) from exc
 
     async def enable_api_access(
         self,
