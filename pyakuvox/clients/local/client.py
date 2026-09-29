@@ -249,10 +249,8 @@ class LocalClient(AkuvoxClientBase):
                     f"(auth_type={self._settings.auth_type})"
                 )
             if response.status_code == 403:
-                # 403 on Akuvox is almost never a bad password — it's the API in
-                # WhiteList/None auth mode refusing the path (wrong dialect/mode).
-                # ApiAccessForbiddenError subclasses AuthenticationError so old
-                # handlers still catch it, but the message is actionable.
+                # Preserve the typed access-denied result without inferring a
+                # specific API mode or credential validity from HTTP 403 alone.
                 raise ApiAccessForbiddenError(path, host=self._settings.host)
 
             if response.status_code >= 400:
