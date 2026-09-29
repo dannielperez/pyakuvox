@@ -542,3 +542,65 @@ async def test_fcgi_readback_timeout_does_not_allow_another_write():
         with pytest.raises(AmbiguousMutationError, match="readback"):
             await web.enable_api_access("admin", "test-password")
         assert web._client.post.await_count == 1
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"retcode": -1, "message": "API disabled"},
+        {"retcode": -1, "data": {"Status": {"Model": "X916S"}}},
+        {"retcode": 0, "message": "OK"},
+        {"error": "forbidden"},
+        {"data": {"Status": {}}},
+        {"data": {"Status": {"Model": ""}}},
+        {"data": {"Status": {"Model": {"unexpected": "shape"}}}},
+        {"data": []},
+    ],
+)
+def test_digest_verification_rejects_application_errors_and_non_identity_json(payload):
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.get.return_value = _resp(body=payload)
+    with patch.object(flip_mod.httpx, "AsyncClient", return_value=client):
+        assert not asyncio.run(verify_digest("192.0.2.10", "admin", "test-only"))
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"retcode": 0, "data": {"Status": {"Model": "X916S"}}},
+        {"Status": {"MAC": "02:00:00:00:00:01"}},
+        {"data": {"Model": "R29C"}},
+        {"Model": "S535"},
+    ],
+)
+def test_digest_verification_accepts_supported_identity_envelopes(payload):
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.get.return_value = _resp(body=payload)
+    with patch.object(flip_mod.httpx, "AsyncClient", return_value=client):
+        assert asyncio.run(verify_digest("192.0.2.10", "admin", "test-only"))
+
+
+@pytest.mark.asyncio
+async def test_api_error_does_not_short_circuit_api_preparation():
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.get.return_value = _resp(body={"retcode": -1, "message": "disabled"})
+    identity = DeviceIdentity(host="192.0.2.10", reachable=True, dialect=ApiDialect.FCGI_WEB)
+    endpoint = flip_mod._DigestEndpoint(scheme="https", port=443)
+    with (
+        patch.object(flip_mod.httpx, "AsyncClient", return_value=client),
+        patch.object(flip_mod, "identify", AsyncMock(return_value=identity)) as identify_panel,
+        patch.object(flip_mod, "_flip_fcgi", AsyncMock(return_value=("x916", endpoint))) as prepare,
+    ):
+        result = await enable_api_digest(
+            "192.0.2.10",
+            web_user="admin",
+            web_pass="test-only",
+            api_user="admin",
+            api_pass="test-only",
+        )
+    assert result.ok and result.verdict == "applied"
+    identify_panel.assert_awaited_once()
+    prepare.assert_awaited_once()
