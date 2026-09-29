@@ -79,6 +79,23 @@ def _ctx() -> ssl.SSLContext:
     return ctx
 
 
+def _is_system_info(payload: object) -> bool:
+    """Require successful device identity evidence, not merely HTTP 200 JSON."""
+    if not isinstance(payload, dict) or payload.get("retcode") not in (None, 0):
+        return False
+    data = payload.get("data", payload)
+    if not isinstance(data, dict):
+        return False
+    status = data.get("Status", data)
+    if not isinstance(status, dict):
+        return False
+    # Match the envelopes consumed by the local device-info parser. Model-only
+    # firmware remains usable; callers need not supply or know a MAC address.
+    return any(
+        isinstance(status.get(key), str) and bool(status[key].strip()) for key in ("Model", "MAC")
+    )
+
+
 async def _probe_digest_endpoint(
     host: str,
     api_user: str,
@@ -86,7 +103,7 @@ async def _probe_digest_endpoint(
     *,
     timeout: float = 8.0,
 ) -> _DigestEndpoint | None:
-    """Return the endpoint where Digest produced a non-empty JSON object.
+    """Return the endpoint where Digest produced successful system identity data.
 
     Tries HTTPS (S5xx) then HTTP (X916/R29C). This is the ground-truth check
     that the API is actually usable headlessly — not just that a write returned
@@ -110,7 +127,7 @@ async def _probe_digest_endpoint(
                 payload = r.json()
             except ValueError:
                 continue
-            if isinstance(payload, dict) and payload:
+            if _is_system_info(payload):
                 return _DigestEndpoint(
                     scheme=scheme,
                     port=443 if scheme == "https" else 80,

@@ -36,16 +36,11 @@ class AuthenticationError(AkuvoxError):
 
 
 class ApiAccessForbiddenError(AuthenticationError):
-    """The device returned HTTP 403 — the HTTP API is reachable but is
-    refusing the request for a reason that is NOT a bad password.
+    """The API rejected access with HTTP 403; the underlying cause is unknown.
 
-    On Akuvox firmware a 403 almost always means the API auth mode is
-    ``WhiteList`` (mode 2) with an empty/мismatched allow-list, or ``None``
-    mode rejecting the path — i.e. the wrong *dialect/mode*, not wrong creds.
-    The fix is to flip the API to Digest (mode 4) via the device web UI, not
-    to try other passwords. Subclasses AuthenticationError so existing
-    ``except AuthenticationError`` handlers (and ``"forbidden" in str(e)``
-    checks) keep working.
+    Keep the AuthenticationError base for compatibility with existing callers.
+    The status alone does not identify the API configuration or establish
+    whether the supplied credentials are correct.
     """
 
     def __init__(self, path: str, host: str = "") -> None:
@@ -53,8 +48,9 @@ class ApiAccessForbiddenError(AuthenticationError):
         self.host = host
         super().__init__(
             f"Access forbidden for {path}"
-            f"{f' on {host}' if host else ''} (HTTP 403) — the API is likely in "
-            f"WhiteList/None auth mode, not a credential failure; flip it to Digest."
+            f"{f' on {host}' if host else ''} (HTTP 403). "
+            "Check API enablement, authentication mode, access restrictions, and "
+            "account permissions; this response alone does not identify the cause."
         )
 
 
