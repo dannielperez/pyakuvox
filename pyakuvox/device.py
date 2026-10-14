@@ -390,6 +390,9 @@ class AkuvoxDevice:
                     for key, value in wants.items()
                     if not key.endswith("NameDisplay") or key in cfg
                 }
+            building_display = "Config.DoorSetting.GENERAL.BuildingDisplayType"
+            if not configuration.building_display_required and building_display not in cfg:
+                wants.pop(building_display, None)
             adapter.validate_surface(cfg, wants)
         except DeviceError as exc:
             return {

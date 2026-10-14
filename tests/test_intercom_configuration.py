@@ -210,3 +210,28 @@ def test_optional_visibility_still_sets_it_when_supported():
     assert result["verdict"] == IntercomConfigurationVerdict.SET_VERIFIED
     assert client.config["Config.DoorSetting.DISPLAY.Key1NameDisplay"] == "1"
     assert "Config.DoorSetting.DISPLAY.Key6NameDisplay" not in client.config
+
+
+def test_optional_building_display_preserves_required_relay_configuration():
+    from dataclasses import replace
+
+    requested = replace(requested_configuration(), building_display_required=False)
+    current = {key: "legacy" for key in desired_config()}
+    current.pop("Config.DoorSetting.GENERAL.BuildingDisplayType")
+    client = FakeClient(current)
+    result = run(device(client).ensure_intercom_configuration(requested, apply=True))
+    assert result["verdict"] == IntercomConfigurationVerdict.SET_VERIFIED
+    assert "Config.DoorSetting.GENERAL.BuildingDisplayType" not in client.sets[0]
+    assert client.config["Config.DoorSetting.DTMF.Code2"] == requested.relay_dtmf_codes[1]
+
+
+def test_optional_building_display_does_not_skip_missing_relay_fields():
+    from dataclasses import replace
+
+    requested = replace(requested_configuration(), building_display_required=False)
+    current = {key: "legacy" for key in desired_config()}
+    current.pop("Config.DoorSetting.DTMF.Code2")
+    client = FakeClient(current)
+    result = run(device(client).ensure_intercom_configuration(requested, apply=True))
+    assert result["verdict"] == IntercomConfigurationVerdict.UNSUPPORTED_FIRMWARE
+    assert not client.sets
