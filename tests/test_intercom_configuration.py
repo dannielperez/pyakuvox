@@ -181,3 +181,19 @@ def test_model_adapter_registry_never_guesses_fallback():
     assert adapter.model == "X916"
     assert adapter.transport == "digest-config-api"
     assert intercom_adapter("R29") is None
+
+
+def test_unspecified_name_visibility_supports_older_x916_surface():
+    from dataclasses import replace
+
+    requested = requested_configuration()
+    requested = replace(
+        requested,
+        homepage_keys=tuple(replace(key, show_name=None) for key in requested.homepage_keys),
+    )
+    current = {key: "legacy" for key in desired_config() if not key.endswith("NameDisplay")}
+    client = FakeClient(current)
+    result = run(device(client).ensure_intercom_configuration(requested, apply=True))
+    assert result["verdict"] == IntercomConfigurationVerdict.SET_VERIFIED
+    assert all(not key.endswith("NameDisplay") for key in client.sets[0])
+    assert client.config["Config.DoorSetting.DISPLAY.Key1Number"] == "700"

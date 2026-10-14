@@ -287,6 +287,61 @@ class WebUIClient:
             ) from exc
         return resp.status_code
 
+    async def ensure_x916_homepage_dial_account(
+        self, account: int, *, apply: bool = False
+    ) -> dict[str, Any]:
+        """Select the X916 intercom homepage's outgoing SIP account.
+
+        The account selector is FCGI-only on firmware that omits it from the
+        config API. It applies to the homepage, not the independent SIP account
+        credentials. The caller must establish the X916 model before use.
+        """
+        from pyakuvox.intercom import IntercomConfigurationVerdict as Verdict
+
+        if type(account) is not int or account not in (1, 2):
+            raise ValueError("account must be 1 or 2")
+        page = "id=130&id=19"
+        field = "hcBuildingDialType"
+        fields = await self._read_page(page)
+        before = fields.get(field)
+        if before not in ("0", "1", "2"):
+            return {
+                "verdict": Verdict.UNSUPPORTED_FIRMWARE,
+                "changed": False,
+                "applied": False,
+                "reason": "Homepage dial account is unavailable.",
+            }
+        wanted = str(account)
+        result = {
+            "before": {"homepage_account": before},
+            "changed": before != wanted,
+            "applied": False,
+            "plan": {},
+        }
+        if before == wanted:
+            return {**result, "verdict": Verdict.ALREADY_SET, "after": {"homepage_account": before}}
+        result["plan"] = {"homepage_account": f"{before} -> {wanted}"}
+        if not apply:
+            return {**result, "verdict": Verdict.WOULD_CHANGE}
+        ambiguous = None
+        try:
+            status = await self._write_page(
+                page, f"begin&cBuildingDialType={wanted}&SubmitData=end"
+            )
+            if status != 200:
+                raise DeviceError(f"Homepage account write returned HTTP {status}")
+        except AmbiguousMutationError as exc:
+            ambiguous = exc
+        after = (await self._read_page(page)).get(field)
+        if after != wanted and ambiguous is not None:
+            raise ambiguous
+        return {
+            **result,
+            "applied": True,
+            "after": {"homepage_account": after},
+            "verdict": Verdict.SET_VERIFIED if after == wanted else Verdict.SET_DID_NOT_STICK,
+        }
+
     # ── HTTP API config ─────────────────────────────────────────────
 
     async def get_http_api_config(self) -> HttpApiConfig:

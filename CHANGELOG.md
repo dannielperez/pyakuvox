@@ -84,3 +84,16 @@
 - Production-grade LocalClient with retry/backoff, response validation, and capability checks
 - Pydantic v2 domain models for all device data
 - Changed license from GPLv3 to MIT
+
+
+## Unreleased — X916 homepage account verification
+
+- Added `ensure_homepage_dial_account(LocalSettings, account, model="X916", apply=...)`.
+  It reads the FCGI Key/Display account selector, changes only that selector when
+  requested, and verifies the value without altering SIP credentials. Unsupported
+  firmware and non-sticky writes remain explicit failures.
+- `IntercomHomepageKey.show_name=None` preserves firmware visibility, allowing
+  callers to configure required homepage/relay fields on older X916 firmware
+  without requiring newer optional `NameDisplay` fields.
+- Validation: 274 offline tests passed; targeted changed-file lint and type checks.
+  Repository-wide lint retains pre-existing failures outside this change.
