@@ -91,7 +91,7 @@ async def read_device_info_with_auth_detection(settings: LocalSettings) -> Devic
     from pyakuvox.config import LocalAuthType
     from pyakuvox.exceptions import AuthenticationError
 
-    async def read():
+    async def read() -> DeviceInfo:
         try:
             async with LocalClient(settings, max_retries=0) as client:
                 return await client.get_device_info()
