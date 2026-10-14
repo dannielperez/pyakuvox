@@ -99,3 +99,7 @@
   Repository-wide lint retains pre-existing failures outside this change.
 
 - `name_visibility_required=False` tolerates absent optional label-visibility fields while still enabling them when supported.
+
+- Added bounded read-only identity authentication detection: rejected Basic can
+  retry Digest with the same credentials, without changing device settings or
+  falling back from explicitly configured Digest. Offline suite:277 passed.

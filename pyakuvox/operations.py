@@ -14,6 +14,7 @@ from pyakuvox.identify import SIPStatusSource, identify, profile_for_model
 
 if TYPE_CHECKING:
     from pyakuvox.config import LocalSettings
+    from pyakuvox.models.device import DeviceInfo
 
 
 async def read_sip_account_status(
@@ -75,3 +76,30 @@ async def ensure_homepage_dial_account(
     ) as webui:
         await webui.login(settings.username, settings.password.get_secret_value())
         return await webui.ensure_x916_homepage_dial_account(account, apply=apply)
+
+
+async def read_device_info_with_auth_detection(settings: LocalSettings) -> DeviceInfo:
+    """Read identity with a bounded Basic-to-Digest compatibility fallback.
+
+    Reuses the supplied credentials and transport; never changes API settings.
+    Only rejected Basic authentication attempts Digest. Other failures and
+    explicitly selected non-Basic modes propagate without another attempt.
+    """
+    import asyncio
+
+    from pyakuvox.clients.local.client import LocalClient
+    from pyakuvox.config import LocalAuthType
+    from pyakuvox.exceptions import AuthenticationError
+
+    async def read():
+        try:
+            async with LocalClient(settings, max_retries=0) as client:
+                return await client.get_device_info()
+        except AuthenticationError:
+            if settings.auth_type != LocalAuthType.BASIC:
+                raise
+        detected = settings.model_copy(update={"auth_type": LocalAuthType.DIGEST})
+        async with LocalClient(detected, max_retries=0) as client:
+            return await client.get_device_info()
+
+    return await asyncio.wait_for(read(), timeout=min(float(settings.timeout), 30.0))
