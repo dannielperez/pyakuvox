@@ -81,7 +81,11 @@ if TYPE_CHECKING:
         validate_sip_password,
     )
     from pyakuvox.models.device import DeviceInfo, DeviceStatus, RelayState
-    from pyakuvox.operations import ensure_homepage_dial_account, read_sip_account_status
+    from pyakuvox.operations import (
+        ensure_homepage_dial_account,
+        read_device_info_with_auth_detection,
+        read_sip_account_status,
+    )
 else:
     try:
         from pyakuvox.clients.local.client import LocalClient
@@ -108,7 +112,11 @@ else:
             validate_sip_password,
         )
         from pyakuvox.models.device import DeviceInfo, DeviceStatus, RelayState
-        from pyakuvox.operations import ensure_homepage_dial_account, read_sip_account_status
+        from pyakuvox.operations import (
+            ensure_homepage_dial_account,
+            read_device_info_with_auth_detection,
+            read_sip_account_status,
+        )
     except ModuleNotFoundError:  # pragma: no cover - supports lightweight helper imports
         LocalClient = None
         SIPAccountStatus = None
@@ -132,6 +140,7 @@ else:
         DeviceStatus = None
         RelayState = None
         read_sip_account_status = None
+        read_device_info_with_auth_detection = None
         ensure_homepage_dial_account = None
 
 __all__ = [
@@ -197,6 +206,7 @@ __all__ = [
     "map_ip",
     "plan_static_network",
     "profile_for_model",
+    "read_device_info_with_auth_detection",
     "read_sip_account_status",
     "render_body",
     "render_url",
