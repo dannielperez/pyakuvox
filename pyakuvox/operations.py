@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
 from pyakuvox.clients.local.webui import (
     ConfigPasswordEncoding,
     SIPAccountStatus,
@@ -9,6 +11,9 @@ from pyakuvox.clients.local.webui import (
 )
 from pyakuvox.exceptions import AkuvoxError, UnsupportedFeatureError
 from pyakuvox.identify import SIPStatusSource, identify, profile_for_model
+
+if TYPE_CHECKING:
+    from pyakuvox.config import LocalSettings
 
 
 async def read_sip_account_status(
@@ -53,3 +58,20 @@ async def read_sip_account_status(
     if last_error is not None:
         raise last_error
     raise UnsupportedFeatureError("sip_account_status", resolved_model or "unknown model")
+
+
+async def ensure_homepage_dial_account(
+    settings: LocalSettings, account: int, *, model: str, apply: bool = False
+) -> dict[str, Any]:
+    """Configure a verified model's homepage account using its existing transport."""
+    if model.strip().upper() != "X916":
+        raise UnsupportedFeatureError("homepage_dial_account", model)
+    async with WebUIClient(
+        host=settings.host,
+        port=settings.port,
+        use_ssl=settings.use_ssl,
+        verify_ssl=settings.verify_ssl,
+        timeout=settings.timeout,
+    ) as webui:
+        await webui.login(settings.username, settings.password.get_secret_value())
+        return await webui.ensure_x916_homepage_dial_account(account, apply=apply)

@@ -384,6 +384,12 @@ class AkuvoxDevice:
                 "reason": str(exc),
             }
         try:
+            if not configuration.name_visibility_required:
+                wants = {
+                    key: value
+                    for key, value in wants.items()
+                    if not key.endswith("NameDisplay") or key in cfg
+                }
             adapter.validate_surface(cfg, wants)
         except DeviceError as exc:
             return {

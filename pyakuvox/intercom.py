@@ -22,12 +22,12 @@ class IntercomKeyType(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class IntercomHomepageKey:
-    """One caller-defined key on an intercom homepage."""
+    """One caller-defined homepage key; ``show_name=None`` preserves visibility."""
 
     key_type: IntercomKeyType
     label: str
     value: str
-    show_name: bool
+    show_name: bool | None
 
     def __post_init__(self) -> None:
         if self.key_type is IntercomKeyType.SPEED_DIAL and not self.value.strip():
@@ -42,6 +42,7 @@ class IntercomConfiguration:
     relay_dtmf_codes: tuple[str, ...]
     relay_hold_seconds: int
     allow_dtmf_from_all_numbers: bool
+    name_visibility_required: bool = True
 
     def __post_init__(self) -> None:
         if not self.homepage_keys:
@@ -109,9 +110,7 @@ def x916_intercom_config(configuration: IntercomConfiguration) -> dict[str, str]
         f"{general}.BuildingDisplayType": "0",
         f"{dtmf}.Enable": "1",
         f"{dtmf}.Option": "0",
-        f"{dtmf}.DtmfWhitelist": (
-            "2" if configuration.allow_dtmf_from_all_numbers else "0"
-        ),
+        f"{dtmf}.DtmfWhitelist": ("2" if configuration.allow_dtmf_from_all_numbers else "0"),
     }
     for slot, key in enumerate(configuration.homepage_keys, start=1):
         wants.update(
@@ -119,9 +118,10 @@ def x916_intercom_config(configuration: IntercomConfiguration) -> dict[str, str]
                 f"{display}.Key{slot}Label": key.label,
                 f"{display}.Key{slot}Type": key_type_codes[key.key_type],
                 f"{display}.Key{slot}Number": key.value,
-                f"{display}.Key{slot}NameDisplay": "1" if key.show_name else "0",
             }
         )
+        if key.show_name is not None:
+            wants[f"{display}.Key{slot}NameDisplay"] = "1" if key.show_name else "0"
     for relay_number, (suffix, code) in enumerate(
         zip("ABCD", configuration.relay_dtmf_codes, strict=True),
         start=1,
