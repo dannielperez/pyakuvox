@@ -197,3 +197,16 @@ def test_unspecified_name_visibility_supports_older_x916_surface():
     assert result["verdict"] == IntercomConfigurationVerdict.SET_VERIFIED
     assert all(not key.endswith("NameDisplay") for key in client.sets[0])
     assert client.config["Config.DoorSetting.DISPLAY.Key1Number"] == "700"
+
+
+def test_optional_visibility_still_sets_it_when_supported():
+    from dataclasses import replace
+
+    requested = replace(requested_configuration(), name_visibility_required=False)
+    current = {key: "legacy" for key in desired_config()}
+    current.pop("Config.DoorSetting.DISPLAY.Key6NameDisplay")
+    client = FakeClient(current)
+    result = run(device(client).ensure_intercom_configuration(requested, apply=True))
+    assert result["verdict"] == IntercomConfigurationVerdict.SET_VERIFIED
+    assert client.config["Config.DoorSetting.DISPLAY.Key1NameDisplay"] == "1"
+    assert "Config.DoorSetting.DISPLAY.Key6NameDisplay" not in client.config

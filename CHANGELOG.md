@@ -95,5 +95,7 @@
 - `IntercomHomepageKey.show_name=None` preserves firmware visibility, allowing
   callers to configure required homepage/relay fields on older X916 firmware
   without requiring newer optional `NameDisplay` fields.
-- Validation: 274 offline tests passed; targeted changed-file lint and type checks.
+- Validation: 275 offline tests passed; targeted changed-file lint and type checks.
   Repository-wide lint retains pre-existing failures outside this change.
+
+- `name_visibility_required=False` tolerates absent optional label-visibility fields while still enabling them when supported.

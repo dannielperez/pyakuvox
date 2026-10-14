@@ -42,6 +42,7 @@ class IntercomConfiguration:
     relay_dtmf_codes: tuple[str, ...]
     relay_hold_seconds: int
     allow_dtmf_from_all_numbers: bool
+    name_visibility_required: bool = True
 
     def __post_init__(self) -> None:
         if not self.homepage_keys:
