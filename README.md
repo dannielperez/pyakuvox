@@ -271,3 +271,19 @@ Alpha — local API client, CLI, and web UI config are functional against real h
 
 This project is licensed under the [MIT License](LICENSE).
 Previous versions were released under GPLv3.
+
+### SIP flow diagnosis and recovery
+
+`pyakuvox.sip_recovery.inspect_sip(client)` returns a secret-free account summary.
+`renew_udp_flow(client, slot=2, username="1201", server="192.0.2.11",
+mac="00:11:22:33:44:55")` renews a fixed UDP listen port after 60 seconds of
+observed idle. Construct `LocalClient` with `max_retries=0` and a short request
+timeout; the operation has a 130-second deadline. The caller must serialize all
+mutations to that device and independently verify registrar reachability afterward.
+
+Only ports 5060–5099 not reserved by enabled accounts are selected. This requires
+that the network permit that bounded range. The result records before/after ports,
+local registration verification and rollback status. Unknown/ambiguous outcomes
+require inspection; do not retry blindly. A local registration status does not
+prove two-way speech. Firmware must support the local configuration and call-state
+APIs; validate on an approved canary before enabling recovery across a fleet.

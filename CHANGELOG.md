@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added — idle-only SIP flow recovery
+- `sip_recovery.inspect_sip` returns allowlisted account, identity and call-state evidence.
+- `renew_udp_flow` observes 60 seconds of idle, changes only one enabled UDP account’s fixed local port, and verifies registration. Requires a non-retrying client and an external device mutex.
+- Unverified changes attempt an identity-checked restoration only while idle and the written ports remain owned; ambiguous results never trigger a write retry. TCP/TLS, unknown identity, active calls and exhausted port ranges refuse.
+
+
 ### Added — secret-free security evidence
 - `AkuvoxDevice.security_snapshot(...)` returns a typed credential-risk verdict
   and complete user-account summaries without PIN, card, or password values.
