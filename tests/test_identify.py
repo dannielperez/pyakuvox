@@ -184,3 +184,59 @@ def test_unreachable_returns_safe_identity():
     assert isinstance(ident, DeviceIdentity)
     assert not ident.reachable
     assert ident.dialect == ApiDialect.UNKNOWN
+
+
+@pytest.mark.parametrize("http_status", [None, 308])
+def test_https_only_digest_is_identified(http_status):
+    def handler(request):
+        if request.url.scheme == "http":
+            if http_status is None:
+                raise httpx.ConnectError("offline", request=request)
+            return httpx.Response(http_status, headers={"location": "https://other.invalid/"})
+        assert request.url.host == "192.0.2.10"
+        assert request.url.port is None or request.url.port == 443
+        return httpx.Response(401, headers={"www-authenticate": 'Digest realm="HTTP API"'})
+
+    ident = _run(identify("192.0.2.10", transport=_transport(handler)))
+    assert ident.headless_manageable
+    assert ident.use_ssl is True
+    assert ident.port == 443
+
+
+def test_explicit_tls_custom_port_never_downgrades():
+    def handler(request):
+        assert request.url.scheme == "https"
+        assert request.url.port == 8443
+        raise httpx.ConnectError("offline", request=request)
+
+    ident = _run(identify("192.0.2.10", port=8443, use_ssl=True, transport=_transport(handler)))
+    assert not ident.reachable
+
+
+def test_arbitrary_html_200_is_not_an_akuvox_digest_api():
+    ident = _run(
+        identify(
+            "192.0.2.10",
+            transport=_transport(lambda _: httpx.Response(200, text="<html>Router</html>")),
+        )
+    )
+    assert ident.dialect == ApiDialect.UNKNOWN
+    assert not ident.headless_manageable
+
+
+@pytest.mark.parametrize("status", [302, 403])
+def test_generic_redirect_or_forbidden_is_not_vendor_identification(status):
+    ident = _run(identify("192.0.2.10", transport=_transport(lambda _: httpx.Response(status))))
+    assert ident.dialect == ApiDialect.UNKNOWN
+
+
+def test_configured_https_digest_custom_port():
+    def handler(request):
+        assert request.url.scheme == "https"
+        assert request.url.port == 8443
+        return httpx.Response(200, text=_status_body("R29"))
+
+    ident = _run(identify("192.0.2.10", port=8443, use_ssl=True, transport=_transport(handler)))
+    assert ident.headless_manageable
+    assert ident.port == 8443
+    assert ident.use_ssl
