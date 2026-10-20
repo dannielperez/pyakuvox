@@ -124,6 +124,7 @@ class DeviceIdentity(BaseModel):
 
     host: str
     port: int = 80
+    use_ssl: bool = False
     reachable: bool = False
     dialect: ApiDialect = ApiDialect.UNKNOWN
     model: str = ""
@@ -193,13 +194,22 @@ async def _get(client: httpx.AsyncClient, url: str) -> httpx.Response | None:
         return None
 
 
-async def _probe_web_api(client: httpx.AsyncClient, host: str) -> tuple[str, str, str] | None:
+def _endpoints(ident: DeviceIdentity) -> tuple[tuple[str, int], ...]:
+    if ident.use_ssl:
+        return (("https", ident.port),)
+    return (("https", 443 if ident.port == 80 else ident.port), ("http", ident.port))
+
+
+async def _probe_web_api(
+    client: httpx.AsyncClient, host: str, ident: DeviceIdentity
+) -> tuple[str, str, str] | None:
     """SPA /api/web/system/info → (model, firmware, hardware), no auth."""
-    for scheme in ("https", "http"):
-        r = await _get(client, f"{scheme}://{host}/api/web/system/info")
+    for scheme, port in _endpoints(ident):
+        r = await _get(client, f"{scheme}://{host}:{port}/api/web/system/info")
         if r is not None and r.status_code == 200:
             s = _parse_status_block(r.text)
             if s.get("Model"):
+                ident.port, ident.use_ssl = port, scheme == "https"
                 return (
                     s.get("Model", ""),
                     s.get("FirmwareVersion", ""),
@@ -208,28 +218,32 @@ async def _probe_web_api(client: httpx.AsyncClient, host: str) -> tuple[str, str
     return None
 
 
-async def _probe_fcgi_web(client: httpx.AsyncClient, host: str) -> bool:
+async def _probe_fcgi_web(client: httpx.AsyncClient, host: str, ident: DeviceIdentity) -> bool:
     """Return whether the panel exposes the legacy FCGI login nonce.
 
     Some R29/X916 firmware redirects every HTTP request to HTTPS with 308.  A
     redirect alone therefore cannot distinguish the Vue SPA from the older
     ``/fcgi/do`` UI.
     """
-    for scheme in ("https", "http"):
-        r = await _get(client, f"{scheme}://{host}/fcgi/do?action=Encrypt")
+    for scheme, port in _endpoints(ident):
+        r = await _get(client, f"{scheme}://{host}:{port}/fcgi/do?action=Encrypt")
         if r is not None and r.status_code == 200 and "value='" in r.text:
+            ident.port, ident.use_ssl = port, scheme == "https"
             return True
     return False
 
 
-async def _probe_legacy_web(client: httpx.AsyncClient, host: str) -> str | None:
+async def _probe_legacy_web(
+    client: httpx.AsyncClient, host: str, ident: DeviceIdentity
+) -> str | None:
     """E18C /web/status/get → ProductName, no auth."""
-    for scheme in ("http", "https"):
-        r = await _get(client, f"{scheme}://{host}/web/status/get?session=&web=1")
+    for scheme, port in _endpoints(ident):
+        r = await _get(client, f"{scheme}://{host}:{port}/web/status/get?session=&web=1")
         if r is not None and r.status_code == 200:
             d = _parse_status_block(r.text)
             pn = d.get("ProductName") or d.get("productName") or d.get("Model")
             if pn:
+                ident.port, ident.use_ssl = port, scheme == "https"
                 return str(pn)
     return None
 
@@ -239,6 +253,8 @@ async def identify(
     *,
     port: int = 80,
     timeout: float = 6.0,
+    use_ssl: bool = False,
+    verify_ssl: bool = False,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> DeviceIdentity:
     """Identify a device's API dialect (and model/fw where free) without login.
@@ -246,8 +262,12 @@ async def identify(
     Never raises for an offline/odd device — returns a ``DeviceIdentity`` with
     ``reachable=False`` / ``dialect=UNKNOWN`` instead, so it is safe to fan out
     across a whole subnet. ``transport`` is an injection seam for tests.
+    ``use_ssl`` honors a configured HTTPS endpoint without HTTP downgrade;
+    HTTP connection failure/redirect also probes HTTPS on 443 (or the supplied
+    custom port). The returned port/use_ssl identify the recognized endpoint.
+    ``verify_ssl`` retains the caller's certificate verification policy.
     """
-    ident = DeviceIdentity(host=host, port=port)
+    ident = DeviceIdentity(host=host, port=port, use_ssl=use_ssl)
     client_kwargs: dict[str, Any] = {
         "timeout": httpx.Timeout(timeout),
         "follow_redirects": False,
@@ -255,12 +275,31 @@ async def identify(
     if transport is not None:
         client_kwargs["transport"] = transport
     else:
-        client_kwargs["verify"] = _legacy_ctx()
+        client_kwargs["verify"] = True if verify_ssl else _legacy_ctx()
     async with httpx.AsyncClient(**client_kwargs) as client:
-        primary = await _get(client, f"http://{host}:{port}/api/system/info")
+        scheme = "https" if use_ssl else "http"
+        primary = await _get(client, f"{scheme}://{host}:{port}/api/system/info")
+        # Discover an HTTPS-only digest API as well as SPA firmware. Never send
+        # credentials here, follow arbitrary redirect hosts, or downgrade TLS.
+        if not use_ssl and (primary is None or primary.status_code in (301, 302, 307, 308)):
+            tls_port = 443 if port == 80 else port
+            secure = await _get(client, f"https://{host}:{tls_port}/api/system/info")
+            if secure is not None and (
+                (
+                    secure.status_code == 401
+                    and "HTTP API" in secure.headers.get("www-authenticate", "")
+                )
+                or (secure.status_code == 200 and _parse_status_block(secure.text).get("Model"))
+            ):
+                primary = secure
+                ident.port = tls_port
+                ident.use_ssl = True
         if primary is None:
+            if use_ssl:
+                ident.note = "configured HTTPS endpoint unreachable"
+                return ident
             # Port 80 dead — try an HTTPS SPA probe before giving up.
-            web = await _probe_web_api(client, host)
+            web = await _probe_web_api(client, host, ident)
             if web:
                 ident.reachable = True
                 ident.dialect = ApiDialect.WEB_API
@@ -281,7 +320,7 @@ async def identify(
             ident.note = "digest API (login required for model/fw)"
             return ident
 
-        if primary.status_code == 200:
+        if primary.status_code == 200 and _parse_status_block(primary.text).get("Model"):
             ident.dialect = ApiDialect.DIGEST_API
             s = _parse_status_block(primary.text)
             ident.model = s.get("Model", "")
@@ -292,35 +331,37 @@ async def identify(
             return ident
 
         if primary.status_code in (301, 302, 307, 308):
-            web = await _probe_web_api(client, host)
+            web = await _probe_web_api(client, host, ident)
             if web:
                 ident.dialect = ApiDialect.WEB_API
                 ident.model, ident.firmware, ident.hardware = web
                 ident.model_source = "/api/web/system/info"
                 ident.note = "SPA web API (login is browser-JS hashed)"
-            elif await _probe_fcgi_web(client, host):
+            elif await _probe_fcgi_web(client, host, ident):
                 ident.dialect = ApiDialect.FCGI_WEB
                 ident.note = "HTTPS FCGI web UI (login uses /fcgi/do session)"
             else:
-                ident.dialect = ApiDialect.WEB_API
-                ident.note = "SPA web API (login is browser-JS hashed)"
+                ident.note = "redirect without a recognized Akuvox endpoint"
             return ident
 
         if primary.status_code == 403:
             # Ambiguous: legacy E18C, or a digest panel blocked by empty WhiteList.
-            product = await _probe_legacy_web(client, host)
+            product = await _probe_legacy_web(client, host, ident)
             if product:
                 ident.dialect = ApiDialect.LEGACY_WEB
                 ident.model = product
                 ident.model_source = "/web/status/get"
                 ident.note = "legacy E18C web API (login is browser-JS hashed)"
                 return ident
-            web = await _probe_web_api(client, host)
+            web = await _probe_web_api(client, host, ident)
             if web:
                 ident.dialect = ApiDialect.WEB_API
                 ident.model, ident.firmware, ident.hardware = web
                 ident.model_source = "/api/web/system/info"
                 ident.note = "SPA web API (403 on digest path)"
+                return ident
+            if "easyhttpserver" not in ident.server.lower():
+                ident.note = "403 without a recognized Akuvox signature"
                 return ident
             ident.dialect = ApiDialect.DIGEST_API
             ident.note = (
