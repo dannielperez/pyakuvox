@@ -15,6 +15,31 @@ def _mac(value):
     return "".join(c for c in str(value).lower() if c in "0123456789abcdef")
 
 
+def _renewal_port(accounts, account):
+    if account["transport"] != "UDP":
+        raise ValueError("Port renewal supports UDP only; TCP/TLS requires a different recovery")
+    if (
+        account["local_port_min"] != account["local_port_max"]
+        or not account["local_port_min"].isdigit()
+    ):
+        raise ValueError("A fixed local UDP port is required")
+    used = set()
+    for a in accounts:
+        if not a["enabled"]:
+            continue
+        if not a["local_port_min"].isdigit() or not a["local_port_max"].isdigit():
+            raise ValueError("An enabled account has unknown local ports")
+        low, high = int(a["local_port_min"]), int(a["local_port_max"])
+        if not 1 <= low <= high <= 65535:
+            raise ValueError("An enabled account has an invalid local port range")
+        used.update(range(max(5060, low), min(5099, high) + 1))
+    used.add(int(account["local_port_min"]))
+    port = next((p for p in range(5060, 5100) if p not in used), None)
+    if port is None:
+        raise ValueError("No free SIP port in the bounded recovery range")
+    return port
+
+
 async def inspect_sip(client):
     """Return an allowlisted report; never return the configuration/password map."""
     config = _data(await client.get_config())
@@ -41,6 +66,17 @@ async def inspect_sip(client):
                 "registered": status.get(f"Account{slot}", {}).get("Status") == "2",
             }
         )
+    for account in accounts:
+        try:
+            if not account["enabled"]:
+                raise ValueError("SIP account is disabled")
+            _renewal_port(accounts, account)
+        except ValueError as error:
+            account["udp_recovery_supported"] = False
+            account["udp_recovery_reason"] = str(error)
+        else:
+            account["udp_recovery_supported"] = True
+            account["udp_recovery_reason"] = "UDP port renewal configuration is supported"
     return {
         "mac": info.identity.normalized_mac(),
         "call_state": str(call.get("Status", "UNKNOWN"))[:30],
@@ -64,29 +100,7 @@ async def renew_udp_flow(client, *, slot, username, server, mac):
         account = rows[0]
         if not account["enabled"] or account["username"] != username or account["server"] != server:
             raise ValueError("SIP account differs from the approved target")
-        if account["transport"] != "UDP":
-            raise ValueError(
-                "Port renewal supports UDP only; TCP/TLS requires a different recovery"
-            )
-        if (
-            account["local_port_min"] != account["local_port_max"]
-            or not account["local_port_min"].isdigit()
-        ):
-            raise ValueError("A fixed local UDP port is required")
-        used = set()
-        for a in baseline["accounts"]:
-            if not a["enabled"]:
-                continue
-            if not a["local_port_min"].isdigit() or not a["local_port_max"].isdigit():
-                raise ValueError("An enabled account has unknown local ports")
-            low, high = int(a["local_port_min"]), int(a["local_port_max"])
-            if not 1 <= low <= high <= 65535:
-                raise ValueError("An enabled account has an invalid local port range")
-            used.update(range(max(5060, low), min(5099, high) + 1))
-        used.add(int(account["local_port_min"]))
-        port = next((p for p in range(5060, 5100) if p not in used), None)
-        if port is None:
-            raise ValueError("No free SIP port in the bounded recovery range")
+        port = _renewal_port(baseline["accounts"], account)
         started = time.monotonic()
         while True:
             if _data(await client._get("/api/call/status")).get("Status") != "READY":

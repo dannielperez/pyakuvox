@@ -160,3 +160,62 @@ def test_wrong_identity_and_all_ports_reserved_refuse(panel):
     with pytest.raises(ValueError, match="No free SIP port"):
         asyncio.run(renew(client))
     assert not writes
+
+
+@pytest.mark.parametrize(
+    "changes, reason",
+    [
+        ({"SIP.ListenPortMax": "5070"}, "fixed local UDP port"),
+        ({"SIP.ListenPortMin": "", "SIP.ListenPortMax": ""}, "fixed local UDP port"),
+        ({"SIP.ListenPortMin": "0", "SIP.ListenPortMax": "0"}, "invalid local port"),
+        ({"SIP.TransType": "1"}, "UDP only"),
+        ({"GENERAL.Enable": "0"}, "disabled"),
+    ],
+)
+def test_diagnosis_explains_unsupported_configuration_without_writing(panel, changes, reason):
+    client, config, writes = panel
+    config.update({"Config.Account2." + key: value for key, value in changes.items()})
+    account = asyncio.run(recovery.inspect_sip(client))["accounts"][0]
+    assert account["udp_recovery_supported"] is False
+    assert reason in account["udp_recovery_reason"]
+    assert not writes
+    with pytest.raises(ValueError):
+        asyncio.run(renew(client))
+    assert not writes
+
+
+@pytest.mark.parametrize(
+    "low, high, reason",
+    [
+        ("5060", "5099", "No free SIP port"),
+        ("", "", "unknown local ports"),
+        ("5090", "5060", "invalid local port range"),
+    ],
+)
+def test_other_enabled_account_blocks_diagnosis_and_execution(panel, low, high, reason):
+    client, config, writes = panel
+    config.update(
+        {
+            "Config.Account1.GENERAL.Enable": "1",
+            "Config.Account1.SIP.ListenPortMin": low,
+            "Config.Account1.SIP.ListenPortMax": high,
+        }
+    )
+    account = next(
+        a for a in asyncio.run(recovery.inspect_sip(client))["accounts"] if a["slot"] == 2
+    )
+    assert not account["udp_recovery_supported"]
+    assert reason in account["udp_recovery_reason"]
+    with pytest.raises(ValueError, match=reason):
+        asyncio.run(renew(client))
+    assert not writes
+
+
+def test_supported_readiness_is_not_idle_or_registration_verification(panel):
+    client, _, writes = panel
+    client.state = "TALKING"
+    account = asyncio.run(recovery.inspect_sip(client))["accounts"][0]
+    assert account["udp_recovery_supported"] is True
+    with pytest.raises(ValueError, match="active or unknown"):
+        asyncio.run(renew(client))
+    assert not writes
