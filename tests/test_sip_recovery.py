@@ -219,3 +219,62 @@ def test_supported_readiness_is_not_idle_or_registration_verification(panel):
     with pytest.raises(ValueError, match="active or unknown"):
         asyncio.run(renew(client))
     assert not writes
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        {},
+        {"Account2": None},
+        {"Account2": []},
+        {"Account2": {}},
+        {"Account2": {"Status": "unknown"}},
+        {"Account2": {"Status": True}},
+        {"Account2": {"Status": 2.0}},
+        [],
+    ],
+)
+def test_missing_or_malformed_registration_is_unknown(panel, status):
+    client, _, writes = panel
+    original = client._get
+
+    async def get(path):
+        return status if path.endswith("system/info") else await original(path)
+
+    client._get = get
+    account = asyncio.run(recovery.inspect_sip(client))["accounts"][0]
+    assert account["registered"] is None
+    assert not writes
+
+
+@pytest.mark.parametrize(
+    "status, expected",
+    [("2", True), (2, True), ("0", False), ("1", False), ("3", False), ("-1", False), (3, False)],
+)
+def test_known_registration_statuses_keep_their_meaning(panel, status, expected):
+    client, _, _ = panel
+    original = client._get
+
+    async def get(path):
+        return (
+            {"Account2": {"Status": status}}
+            if path.endswith("system/info")
+            else await original(path)
+        )
+
+    client._get = get
+    assert asyncio.run(recovery.inspect_sip(client))["accounts"][0]["registered"] is expected
+
+
+def test_unknown_registration_cannot_verify_a_port_renewal(panel):
+    client, _, writes = panel
+    original = client._get
+
+    async def get(path):
+        return {} if path.endswith("system/info") else await original(path)
+
+    client._get = get
+    result = asyncio.run(renew(client))
+    assert result["verified"] is False
+    assert result["rollback"] == "verified"
+    assert len(writes) == 2

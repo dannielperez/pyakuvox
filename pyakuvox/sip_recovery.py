@@ -15,6 +15,20 @@ def _mac(value):
     return "".join(c for c in str(value).lower() if c in "0123456789abcdef")
 
 
+def _registered(status, slot):
+    """Absent, malformed and unfamiliar status values are not registration failures."""
+    account = status.get(f"Account{slot}") if isinstance(status, dict) else None
+    raw = account.get("Status") if isinstance(account, dict) else None
+    if type(raw) not in (str, int):
+        return None
+    code = str(raw)
+    if code == "2":
+        return True
+    if code in {"0", "1", "3", "-1"}:
+        return False
+    return None
+
+
 def _renewal_port(accounts, account):
     if account["transport"] != "UDP":
         raise ValueError("Port renewal supports UDP only; TCP/TLS requires a different recovery")
@@ -63,7 +77,7 @@ async def inspect_sip(client):
                 ),
                 "local_port_min": str(config.get(prefix + "SIP.ListenPortMin", ""))[:5],
                 "local_port_max": str(config.get(prefix + "SIP.ListenPortMax", ""))[:5],
-                "registered": status.get(f"Account{slot}", {}).get("Status") == "2",
+                "registered": _registered(status, slot),
             }
         )
     for account in accounts:
