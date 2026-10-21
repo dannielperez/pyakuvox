@@ -18,9 +18,10 @@ Protocol (reverse-engineered from the S535 SPA bundle):
 HTTP-API config lives under ``Config.DoorSetting.APIFCGI.*`` (NOT ``HTTPAPI``).
 The API **password** field is plain ``Base64(pw)`` (``encode_config_password_webapi``).
 
-These panels THROTTLE a fast request burst — the login endpoint then returns
-``401`` with a stale Digest challenge. That is rate-limiting, **not** a lockout
-(the browser still logs in fine). :meth:`login` backs off and retries.
+Some firmware routes non-browser user agents into Digest authentication even
+on the SPA login endpoint. Use a browser-compatible user agent. A remaining
+``401`` does not by itself establish throttling or invalid credentials; login
+retries are bounded.
 """
 
 from __future__ import annotations
@@ -34,7 +35,12 @@ import structlog
 
 from pyakuvox.clients.local.encoding import encode_config_password_webapi
 from pyakuvox.clients.local.webui import FirmwareAuthMode, HttpApiConfig
-from pyakuvox.exceptions import AuthenticationError, ConnectionError, DeviceError
+from pyakuvox.exceptions import (
+    AmbiguousMutationError,
+    AuthenticationError,
+    ConnectionError,
+    DeviceError,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -82,7 +88,10 @@ class WebApiClient:
             timeout=httpx.Timeout(self._timeout),
             verify=self._verify_ssl,
             follow_redirects=True,
-            headers={"User-Agent": "pyakuvox"},
+            # S5xx firmware routes non-browser user agents through HTTP-API
+            # Digest authentication even for the web login nonce endpoint.
+            # Retain SDK identification while selecting the observed SPA path.
+            headers={"User-Agent": "Mozilla/5.0 (compatible; pyakuvox)"},
         )
         return self
 
@@ -94,9 +103,7 @@ class WebApiClient:
 
     def _ensure_client(self) -> httpx.AsyncClient:
         if not self._client:
-            raise ConnectionError(
-                "WebApiClient not initialized — use 'async with' context manager"
-            )
+            raise ConnectionError("WebApiClient not initialized — use 'async with' context manager")
         return self._client
 
     def _ensure_session(self) -> None:
@@ -125,20 +132,21 @@ class WebApiClient:
         log = logger.bind(host=self._host)
         last = ""
         for attempt in range(1, _LOGIN_RETRIES + 1):
-            r = await self._post("/api/web/login/set",
-                                  {"target": "login", "action": "set"})
+            r = await self._post("/api/web/login/set", {"target": "login", "action": "set"})
             if r.status_code == 200 and r.text.lstrip().startswith("{"):
                 nonce = (r.json().get("data") or {}).get("encrypt", "")
                 if not nonce:
                     raise AuthenticationError(f"No login nonce from {self._host}")
                 enc = base64.b64encode((nonce + password).encode("utf-8")).decode("ascii")
-                lr = await self._post("/api/web/login/login", {
-                    "target": "login", "action": "login",
-                    "data": {"userName": username, "password": enc},
-                })
-                body: dict[str, Any] = (
-                    lr.json() if lr.text.lstrip().startswith("{") else {}
+                lr = await self._post(
+                    "/api/web/login/login",
+                    {
+                        "target": "login",
+                        "action": "login",
+                        "data": {"userName": username, "password": enc},
+                    },
                 )
+                body: dict[str, Any] = lr.json() if lr.text.lstrip().startswith("{") else {}
                 data = body.get("data")
                 token = data.get("token") if isinstance(data, dict) else None
                 if isinstance(token, str) and token:
@@ -150,8 +158,9 @@ class WebApiClient:
                     f"Login failed for {username}@{self._host} (retcode={body.get('retcode')})"
                 )
             last = f"login/set http{r.status_code}"
-            log.debug("webapi_login_throttled", host=self._host,
-                      attempt=attempt, status=r.status_code)
+            log.debug(
+                "webapi_login_throttled", host=self._host, attempt=attempt, status=r.status_code
+            )
             if attempt < _LOGIN_RETRIES:
                 await asyncio.sleep(_LOGIN_BACKOFF * attempt)
         raise AuthenticationError(f"Login to {self._host} failed: {last} (throttled?)")
@@ -160,8 +169,9 @@ class WebApiClient:
 
     async def _config_get(self, keys: list[str]) -> dict[str, str]:
         self._ensure_session()
-        r = await self._post("/api/web/config/get",
-                             {"target": "config", "action": "get", "data": {"item": keys}})
+        r = await self._post(
+            "/api/web/config/get", {"target": "config", "action": "get", "data": {"item": keys}}
+        )
         if r.status_code != 200:
             raise DeviceError(f"config/get HTTP {r.status_code} on {self._host}")
         if not r.text.lstrip().startswith("{"):
@@ -171,12 +181,13 @@ class WebApiClient:
 
     async def _config_set(self, data: dict[str, str]) -> None:
         self._ensure_session()
-        r = await self._post("/api/web/config/set",
-                             {"target": "config", "action": "set", "data": data})
+        r = await self._post(
+            "/api/web/config/set", {"target": "config", "action": "set", "data": data}
+        )
         if r.status_code != 200:
             raise DeviceError(f"config/set HTTP {r.status_code} on {self._host}")
         body = r.json() if r.text.lstrip().startswith("{") else {}
-        if body.get("retcode") not in (0, None):
+        if body.get("retcode") != 0:
             raise DeviceError(f"config/set retcode={body.get('retcode')} on {self._host}")
 
     # ── HTTP API config ─────────────────────────────────────────────
@@ -184,7 +195,9 @@ class WebApiClient:
     async def get_http_api_config(self) -> HttpApiConfig:
         """Read the current HTTP API configuration (``APIFCGI.*``)."""
         keys = [
-            f"{_APIFCGI}.Enable", f"{_APIFCGI}.AuthMode", f"{_APIFCGI}.UserName",
+            f"{_APIFCGI}.Enable",
+            f"{_APIFCGI}.AuthMode",
+            f"{_APIFCGI}.UserName",
             f"{_APIFCGI}.Password",
             *[f"{_APIFCGI}.WhiteListIP{i:02d}" for i in range(1, 6)],
         ]
@@ -243,5 +256,96 @@ class WebApiClient:
     ) -> HttpApiConfig:
         """One-shot: enable the HTTP API with Digest auth + the given creds."""
         return await self.set_http_api_config(
-            enabled=True, auth_mode=auth_mode, username=username, password=password,
+            enabled=True,
+            auth_mode=auth_mode,
+            username=username,
+            password=password,
         )
+
+    async def align_access_media_credentials(
+        self,
+        username: str,
+        password: str,
+        *,
+        apply: bool = False,
+    ) -> dict[str, Any]:
+        """Configure SPA API/media surfaces using their distinct wire encodings.
+
+        The caller owns web login and must verify a new Digest connection.
+        Config and ONVIF are separate firmware transactions. Any failure after
+        the first write is ambiguous and must never trigger automatic replay.
+        """
+        from pyakuvox.device import CredentialRotationVerdict
+
+        if not username.strip() or not password:
+            raise ValueError("username and password are required")
+        api = "Config.DoorSetting.APIFCGI"
+        rtsp = "Config.DoorSetting.RTSP"
+        config = {
+            f"{api}.Enable": "1",
+            f"{api}.AuthMode": "4",
+            f"{api}.UserName": username,
+            f"{api}.Password": encode_config_password_webapi(password),
+            f"{rtsp}.Enable": "1",
+            f"{rtsp}.Authorization": "1",
+            f"{rtsp}.MJPEGAuthorization": "1",
+            f"{rtsp}.AuthenticationType": "1",
+            f"{rtsp}.Username": encode_config_password_webapi(username),
+            f"{rtsp}.Password": encode_config_password_webapi(password),
+        }
+        current = await self._config_get(list(config))
+        if not all(key in current for key in config):
+            raise DeviceError(
+                "SPA API/media configuration fields are unavailable; no write attempted"
+            )
+        response = await self._ensure_client().get(
+            f"{self.base_url}/api/web/commontool/get",
+            params={"config_name": "DoorOnvifServer"},
+        )
+        body = response.json() if response.status_code == 200 else {}
+        onvif = body.get("data")
+        if (
+            body.get("retcode") != 0
+            or not isinstance(onvif, dict)
+            or not {
+                "DeviceMode",
+                "DeviceUser",
+            }.issubset(onvif)
+        ):
+            raise DeviceError("SPA ONVIF configuration is unavailable; no write attempted")
+        result = {
+            "before": {},
+            "plan": {"api_rtsp_onvif": "align saved credentials"},
+            "applied": False,
+            "verdict": CredentialRotationVerdict.WOULD_CHANGE,
+        }
+        if not apply:
+            return result
+        try:
+            # Write media/API once; the existing web token remains independent
+            # of Digest credentials and can finish the ONVIF transaction.
+            await self._config_set(config)
+            response = await self._post(
+                "/api/web/commontool/set",
+                {
+                    "target": "commontool",
+                    "action": "set",
+                    "data": {
+                        "config_name": "DoorOnvifServer",
+                        "DeviceMode": "0",
+                        "DeviceUser": encode_config_password_webapi(username),
+                        "DevicePwd": encode_config_password_webapi(password),
+                    },
+                },
+            )
+            if response.status_code != 200 or response.json().get("retcode") != 0:
+                raise DeviceError("SPA ONVIF write was not acknowledged")
+        except (Exception, asyncio.CancelledError) as exc:
+            raise AmbiguousMutationError(
+                "SPA credential configuration started but all writes were not confirmed"
+            ) from exc
+        return {
+            **result,
+            "applied": True,
+            "verdict": CredentialRotationVerdict.APPLIED_PENDING_RECONNECT,
+        }

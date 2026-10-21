@@ -604,3 +604,105 @@ async def test_api_error_does_not_short_circuit_api_preparation():
     assert result.ok and result.verdict == "applied"
     identify_panel.assert_awaited_once()
     prepare.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_spa_requests_use_browser_routing_user_agent():
+    async with WebApiClient("192.0.2.1") as web:
+        assert web._client.headers["User-Agent"].startswith("Mozilla/5.0")
+        assert "pyakuvox" in web._client.headers["User-Agent"]
+
+
+def _spa_fields():
+    api, rtsp = "Config.DoorSetting.APIFCGI", "Config.DoorSetting.RTSP"
+    fields = {f"{api}.{k}": "" for k in ("Enable", "AuthMode", "UserName", "Password")}
+    fields.update(
+        {
+            f"{rtsp}.{k}": ""
+            for k in (
+                "Enable",
+                "Authorization",
+                "MJPEGAuthorization",
+                "AuthenticationType",
+                "Username",
+                "Password",
+            )
+        }
+    )
+    return fields
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("apply", [False, True])
+async def test_spa_media_alignment_encodes_fields_and_uses_onvif_interface(apply):
+    api, rtsp = "Config.DoorSetting.APIFCGI", "Config.DoorSetting.RTSP"
+    async with WebApiClient("192.0.2.1") as web:
+        web._token = "synthetic-session"
+        web._config_get = AsyncMock(return_value=_spa_fields())
+        web._config_set = AsyncMock()
+        web._client.get = AsyncMock(
+            return_value=_resp(
+                body={
+                    "retcode": 0,
+                    "data": {"DeviceMode": 1, "DeviceUser": "viewer"},
+                }
+            )
+        )
+        web._post = AsyncMock(return_value=_resp(body={"retcode": 0}))
+        result = await web.align_access_media_credentials("operator", "new-password", apply=apply)
+        assert result["applied"] is apply
+        assert "new-password" not in repr(result)
+        if not apply:
+            web._config_set.assert_not_awaited()
+            web._post.assert_not_awaited()
+            return
+        config = web._config_set.await_args.args[0]
+        assert config[f"{api}.Password"] == base64.b64encode(b"new-password").decode()
+        assert config[f"{rtsp}.Username"] == base64.b64encode(b"operator").decode()
+        assert config[f"{rtsp}.Password"] == base64.b64encode(b"new-password").decode()
+        assert config[f"{api}.UserName"] == "operator"
+        path, payload = web._post.await_args.args
+        assert path == "/api/web/commontool/set"
+        assert payload["data"] == {
+            "config_name": "DoorOnvifServer",
+            "DeviceMode": "0",
+            "DeviceUser": base64.b64encode(b"operator").decode(),
+            "DevicePwd": base64.b64encode(b"new-password").decode(),
+        }
+        assert not any("OnvifServer" in key for key in config)
+
+
+@pytest.mark.asyncio
+async def test_spa_missing_config_surface_fails_before_any_write():
+    from pyakuvox.exceptions import DeviceError
+
+    async with WebApiClient("192.0.2.1") as web:
+        web._token = "synthetic-session"
+        web._config_get = AsyncMock(return_value={})
+        web._config_set = AsyncMock()
+        with pytest.raises(DeviceError, match="no write attempted"):
+            await web.align_access_media_credentials("operator", "synthetic", apply=True)
+        web._config_set.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_spa_partial_write_is_ambiguous_and_not_replayed():
+    from pyakuvox.exceptions import AmbiguousMutationError
+
+    async with WebApiClient("192.0.2.1") as web:
+        web._token = "synthetic-session"
+        web._config_get = AsyncMock(return_value=_spa_fields())
+        web._config_set = AsyncMock()
+        web._client.get = AsyncMock(
+            return_value=_resp(
+                body={
+                    "retcode": 0,
+                    "data": {"DeviceMode": 1, "DeviceUser": "viewer"},
+                }
+            )
+        )
+        web._post = AsyncMock(side_effect=httpx.ReadTimeout("unknown"))
+        with pytest.raises(AmbiguousMutationError):
+            await web.align_access_media_credentials("operator", "synthetic", apply=True)
+        web._config_set.assert_awaited_once()
+        web._post.assert_awaited_once()
