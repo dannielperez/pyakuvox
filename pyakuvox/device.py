@@ -455,8 +455,9 @@ class AkuvoxDevice:
         The write enables the HTTP API in Akuvox Digest mode (``AuthMode=4``),
         enables RTSP authorization for both H.264 and MJPEG, and enables ONVIF.
         RTSP ``AuthenticationType=1`` pins Digest (``0`` is Basic). The operation
-        uses one config write so the three device-owned credential surfaces
-        cannot drift between separate successful calls.
+        uses one config write on native firmware. SPA firmware requires separate
+        config and ONVIF transactions; a partial write is reported as ambiguous
+        and must not be automatically replayed.
 
         Changing the API password invalidates the current authenticated client,
         so this method deliberately does not claim read-back verification. The
@@ -469,8 +470,46 @@ class AkuvoxDevice:
         if not password:
             raise ValueError("password is required")
 
+        # Firmware identity must come from the authenticated endpoint, not a
+        # caller's inventory label. SPA firmware uses encoded web config values
+        # and a separate ONVIF interface; native raw writes can invalidate API auth.
+        budget = float(total_timeout) if total_timeout is not None else 60.0
+        if not 0 < budget <= 60:
+            raise ValueError("credential rotation total timeout is invalid")
+        started = asyncio.get_running_loop().time()
+        client = self._ensure_client()
+        try:
+            async with asyncio.timeout(budget):
+                info = await client.get_device_info()
+        except TimeoutError as exc:
+            raise AkuvoxTimeoutError(
+                "Device identity preflight timed out before any write"
+            ) from exc
+        remaining_budget = budget - (asyncio.get_running_loop().time() - started)
+        if info.identity.model.upper().startswith("S5"):
+            from pyakuvox.clients.local.webapi import WebApiClient
+
+            settings = getattr(client, "_settings", None)
+            if settings is None:
+                raise DeviceError("SPA credential preparation requires local connection settings")
+
+            async def configure_spa():
+                async with WebApiClient(
+                    settings.host,
+                    port=settings.port,
+                    use_ssl=settings.use_ssl,
+                    verify_ssl=settings.verify_ssl,
+                    timeout=settings.timeout,
+                ) as web:
+                    await web.login(settings.username, settings.password.get_secret_value())
+                    return await web.align_access_media_credentials(username, password, apply=apply)
+
+            async with asyncio.timeout(remaining_budget):
+                return await configure_spa()
+
         deadline: float | None = None
         if total_timeout is not None:
+            total_timeout = remaining_budget
             total_timeout = float(total_timeout)
             if total_timeout <= 0 or total_timeout > 60:
                 raise ValueError("credential rotation total timeout is invalid")

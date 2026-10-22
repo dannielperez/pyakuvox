@@ -39,6 +39,11 @@ class FakeClient:
         self.sets: list[dict] = []
         self.reboots = 0
 
+    async def get_device_info(self):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(identity=SimpleNamespace(model="R29"))
+
     async def get_config(self):
         return {"data": dict(self._config)}
 
@@ -1095,3 +1100,34 @@ def test_from_client_wrapper_is_fully_usable():
     res = _run(dev.set_sip_failover(2, PRIMARY, FALLBACK, apply=False))
     assert res["verdict"] == "would-change"
     assert client.sets == []  # dry-run wrote nothing
+
+
+def test_spa_credential_alignment_routes_by_authenticated_model(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from pyakuvox.clients.local.webapi import WebApiClient
+    from pyakuvox.config import LocalSettings
+
+    dev = _device(_access_media_config())
+    dev._client.get_device_info = AsyncMock(
+        return_value=SimpleNamespace(
+            identity=SimpleNamespace(model="S535"),
+        )
+    )
+    dev._client._settings = LocalSettings(
+        host=DEVICE_HOST,
+        port=443,
+        use_ssl=True,
+        username="admin",
+        password="synthetic",
+    )
+    login = AsyncMock()
+    align = AsyncMock(return_value={"applied": True, "verdict": "applied-pending-reconnect"})
+    monkeypatch.setattr(WebApiClient, "login", login)
+    monkeypatch.setattr(WebApiClient, "align_access_media_credentials", align)
+    result = _run(dev.rotate_access_media_credentials("operator", "new-secret", apply=True))
+    login.assert_awaited_once_with("admin", "synthetic")
+    align.assert_awaited_once_with("operator", "new-secret", apply=True)
+    assert result["applied"]
+    assert dev._client.sets == []
