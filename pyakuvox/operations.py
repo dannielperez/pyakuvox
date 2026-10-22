@@ -34,6 +34,12 @@ async def read_sip_account_status(
     firmware, keeping that volatile detail out of the model table.
     """
     resolved_model = model or (await identify(host, timeout=float(timeout))).model
+    if resolved_model.upper() == "S535":
+        from pyakuvox.clients.local.webapi import WebApiClient
+
+        async with WebApiClient(host, timeout=timeout, verify_ssl=verify_ssl) as web:
+            await web.login(username, password)
+            return await web.get_sip_account_status(account)
     profile = profile_for_model(resolved_model)
     if profile.sip_status_source is not SIPStatusSource.FCGI_WEB:
         raise UnsupportedFeatureError("sip_account_status", resolved_model or "unknown model")
@@ -65,6 +71,18 @@ async def ensure_homepage_dial_account(
     settings: LocalSettings, account: int, *, model: str, apply: bool = False
 ) -> dict[str, Any]:
     """Configure a verified model's homepage account using its existing transport."""
+    if model.strip().upper() == "S535":
+        from pyakuvox.clients.local.webapi import WebApiClient
+
+        async with WebApiClient(
+            settings.host,
+            port=settings.port,
+            use_ssl=settings.use_ssl,
+            verify_ssl=settings.verify_ssl,
+            timeout=settings.timeout,
+        ) as web:
+            await web.login(settings.username, settings.password.get_secret_value())
+            return await web.ensure_homepage_dial_account(account, apply=apply)
     if model.strip().upper() != "X916":
         raise UnsupportedFeatureError("homepage_dial_account", model)
     async with WebUIClient(

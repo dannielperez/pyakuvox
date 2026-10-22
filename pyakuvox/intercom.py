@@ -151,7 +151,71 @@ def require_x916_intercom_surface(config: dict[str, Any], wants: dict[str, str])
         )
 
 
+def s535_intercom_config(configuration: IntercomConfiguration) -> dict[str, str]:
+    """Map the four-key building theme and A/B/security relay surfaces.
+
+    Trailing disabled logical keys can be omitted; never drop an active key.
+    Security relay enablement and physical wiring are deliberately preserved.
+    """
+    if len(configuration.homepage_keys) < 4 or any(
+        key.key_type is not IntercomKeyType.DISABLED for key in configuration.homepage_keys[4:]
+    ):
+        raise ValueError("S535 supports four homepage keys; extra keys must be disabled")
+    if len(configuration.relay_dtmf_codes) != 4:
+        raise ValueError("S535 requires codes for relays A, B, SA, and SB")
+    if configuration.name_visibility_required or configuration.building_display_required:
+        raise ValueError("S535 does not expose X916 name/building visibility controls")
+    display = "Config.DoorSetting.DISPLAY"
+    relay = "Config.DoorSetting.RELAY"
+    dtmf = "Config.DoorSetting.DTMF"
+    wants = {
+        "Config.DoorSetting.GENERAL.Theme": "2",
+        f"{dtmf}.Enable": "1",
+        f"{dtmf}.Option": "0",
+        f"{relay}.DTMFUnlock": "2" if configuration.allow_dtmf_from_all_numbers else "0",
+    }
+    types = {
+        IntercomKeyType.SPEED_DIAL: "3",
+        IntercomKeyType.PIN: "0",
+        IntercomKeyType.DISABLED: "4",
+    }
+    for slot, key in enumerate(configuration.homepage_keys[:4], 1):
+        wants.update(
+            {
+                f"{display}.Key{slot}Type": types[key.key_type],
+                f"{display}.Key{slot}Label": key.label,
+                f"{display}.Key{slot}Number": key.value,
+            }
+        )
+    for suffix, code_key, code in zip(
+        ("A", "B", "SA", "SB"),
+        ("Code1", "Code2", "CodeSA", "CodeSB"),
+        configuration.relay_dtmf_codes,
+        strict=True,
+    ):
+        wants[f"{dtmf}.{code_key}"] = code
+        wants[f"{relay}.TriggerDelay{suffix}"] = "0"
+        if suffix in ("A", "B"):
+            wants[f"{relay}.Relay{suffix}Mode"] = "0"
+            wants[f"{relay}.Relay{suffix}Type"] = "0"
+            wants[f"{relay}.Relay{suffix}Delay"] = str(configuration.relay_hold_seconds)
+        else:
+            wants[f"{relay}.HoldDelay{suffix}"] = str(configuration.relay_hold_seconds)
+    return wants
+
+
+def require_s535_intercom_surface(config: dict[str, Any], wants: dict[str, str]) -> None:
+    if any(key not in config for key in wants):
+        raise DeviceError("S535 intercom configuration fields are unavailable")
+
+
 _INTERCOM_ADAPTERS = {
+    "S535": IntercomAdapter(
+        model="S535",
+        transport="digest-config-api",
+        build_config=s535_intercom_config,
+        validate_surface=require_s535_intercom_surface,
+    ),
     "X916": IntercomAdapter(
         model="X916",
         transport="digest-config-api",

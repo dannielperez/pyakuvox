@@ -349,3 +349,72 @@ class WebApiClient:
             "applied": True,
             "verdict": CredentialRotationVerdict.APPLIED_PENDING_RECONNECT,
         }
+
+    async def set_sip_config(self, config: dict[str, str]) -> None:
+        """Write a prepared SIP config once; uncertain mutations are not replayed."""
+        try:
+            await self._config_set(config)
+        except (Exception, asyncio.CancelledError) as exc:
+            raise AmbiguousMutationError("SPA SIP write was not confirmed") from exc
+
+    async def get_sip_account_status(self, account: int):
+        """Read S535 runtime status; unknown codes must never imply registration."""
+        from pyakuvox.clients.local.webui import SIPAccountStatus, SIPRegistrationStatus
+
+        if account not in (1, 2):
+            raise ValueError("S535 SIP account must be 1 or 2")
+        self._ensure_session()
+        response = await self._ensure_client().get(f"{self.base_url}/api/web/system/info")
+        body = response.json() if response.status_code == 200 else {}
+        if body.get("retcode") != 0 or not isinstance(body.get("data"), dict):
+            raise DeviceError("SPA SIP status is unavailable")
+        data = body["data"].get(f"Account{account}") or {}
+        raw = str(data.get("Status", ""))
+        base = f"Config.Account{account}"
+        cfg = await self._config_get([f"{base}.GENERAL.UserName", f"{base}.SIP.Server"])
+        states = {
+            "0": SIPRegistrationStatus.DISABLED,
+            "1": SIPRegistrationStatus.REGISTERING,
+            "2": SIPRegistrationStatus.REGISTERED,
+            "3": SIPRegistrationStatus.FAILED,
+        }
+        return SIPAccountStatus(
+            account=account,
+            username=cfg.get(f"{base}.GENERAL.UserName", ""),
+            server=cfg.get(f"{base}.SIP.Server", ""),
+            status=states.get(raw, SIPRegistrationStatus.UNKNOWN),
+            raw_status=raw,
+        )
+
+    async def ensure_homepage_dial_account(self, account: int, *, apply: bool = False):
+        """Select the S535 reception account and prevent local door-opening actions."""
+        if account not in (1, 2):
+            raise ValueError("S535 homepage account must be 1 or 2")
+        wants = {
+            "Config.DoorSetting.RECEPTION.DialType": str(account),
+            "Config.DoorSetting.RECEPTION.OpenRelay": "0",
+            "Config.DoorSetting.RECEPTION.HttpEnable": "0",
+            "Config.DoorSetting.RECEPTION.SpeedDialGroupEnable": "0",
+        }
+        before = await self._config_get(list(wants))
+        if not all(key in before for key in wants):
+            raise DeviceError("S535 homepage account fields are unavailable")
+        diff = {k: v for k, v in wants.items() if str(before[k]) != v}
+        result = {
+            "before": before,
+            "plan": diff,
+            "changed": bool(diff),
+            "applied": False,
+            "verdict": "would-change" if diff else "already-set",
+        }
+        if diff and apply:
+            await self._config_set(diff)
+            after = await self._config_get(list(wants))
+            result.update(
+                applied=True,
+                after=after,
+                verdict="set-verified"
+                if all(str(after.get(k)) == v for k, v in wants.items())
+                else "set-did-not-stick",
+            )
+        return result
