@@ -706,3 +706,61 @@ async def test_spa_partial_write_is_ambiguous_and_not_replayed():
             await web.align_access_media_credentials("operator", "synthetic", apply=True)
         web._config_set.assert_awaited_once()
         web._post.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        ("0", "disabled"),
+        ("1", "registering"),
+        ("2", "registered"),
+        ("3", "failed"),
+        ("9", "unknown"),
+        ("", "unknown"),
+    ],
+)
+async def test_s535_runtime_registration_requires_known_status(code, expected):
+    web = WebApiClient("192.0.2.10")
+    web._token = "test-token"
+    web._client = AsyncMock()
+    web._client.get.return_value = _resp(
+        body={"retcode": 0, "data": {"Account2": {"Status": code}}}
+    )
+    web._config_get = AsyncMock(
+        return_value={
+            "Config.Account2.GENERAL.UserName": "1001",
+            "Config.Account2.SIP.Server": "192.0.2.20",
+        }
+    )
+    result = await web.get_sip_account_status(2)
+    assert result.status == expected
+    assert result.username == "1001"
+    assert result.server == "192.0.2.20"
+
+
+@pytest.mark.asyncio
+async def test_s535_sip_write_timeout_is_ambiguous_and_never_retried():
+    from pyakuvox.exceptions import AmbiguousMutationError
+
+    web = WebApiClient("192.0.2.10")
+    web._config_set = AsyncMock(side_effect=httpx.ReadTimeout("timeout"))
+    with pytest.raises(AmbiguousMutationError):
+        await web.set_sip_config({"Config.Account2.GENERAL.Pwd": "encoded"})
+    assert web._config_set.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_s535_homepage_account_requires_readback():
+    web = WebApiClient("192.0.2.10")
+    config = {
+        "Config.DoorSetting.RECEPTION.DialType": "1",
+        "Config.DoorSetting.RECEPTION.OpenRelay": "0",
+        "Config.DoorSetting.RECEPTION.HttpEnable": "0",
+        "Config.DoorSetting.RECEPTION.SpeedDialGroupEnable": "0",
+    }
+    web._config_get = AsyncMock(return_value=config)
+    web._config_set = AsyncMock()
+    result = await web.ensure_homepage_dial_account(2, apply=True)
+    assert result["verdict"] == "set-did-not-stick"
+    assert web._config_set.await_count == 1

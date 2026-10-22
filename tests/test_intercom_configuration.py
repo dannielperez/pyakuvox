@@ -235,3 +235,54 @@ def test_optional_building_display_does_not_skip_missing_relay_fields():
     result = run(device(client).ensure_intercom_configuration(requested, apply=True))
     assert result["verdict"] == IntercomConfigurationVerdict.UNSUPPORTED_FIRMWARE
     assert not client.sets
+
+
+def test_s535_preserves_cloud_button_and_security_relay_enablement():
+    from dataclasses import replace
+
+    from pyakuvox.intercom import s535_intercom_config
+
+    requested = replace(
+        requested_configuration(), name_visibility_required=False, building_display_required=False
+    )
+    desired = s535_intercom_config(requested)
+    current = {key: "legacy" for key in desired}
+    current.update(
+        {
+            "Config.DoorSetting.DISPLAY.Key6Number": "cloud-target",
+            "Config.DoorSetting.RELAY.SecurityRelayAEnabled": "0",
+        }
+    )
+    client = FakeClient(current, model="S535")
+    result = run(device(client).ensure_intercom_configuration(requested, apply=True))
+    assert result["verdict"] == "set-verified"
+    assert client.config["Config.DoorSetting.DISPLAY.Key1Type"] == "3"
+    assert client.config["Config.DoorSetting.DISPLAY.Key2Type"] == "0"
+    assert client.config["Config.DoorSetting.DISPLAY.Key6Number"] == "cloud-target"
+    assert client.config["Config.DoorSetting.RELAY.SecurityRelayAEnabled"] == "0"
+    assert not any("Key5" in key or "RelayC" in key for key in client.sets[0])
+
+
+def test_s535_rejects_unrepresentable_keys_and_missing_surface_before_write():
+    from dataclasses import replace
+
+    from pyakuvox.intercom import s535_intercom_config
+
+    requested = replace(
+        requested_configuration(), name_visibility_required=False, building_display_required=False
+    )
+    keys = list(requested.homepage_keys)
+    keys[4] = keys[0]
+    client = FakeClient({}, model="S535")
+    result = run(
+        device(client).ensure_intercom_configuration(
+            replace(requested, homepage_keys=tuple(keys)), apply=True
+        )
+    )
+    assert result["verdict"] == "unsupported-configuration"
+    desired = s535_intercom_config(requested)
+    desired.pop("Config.DoorSetting.DTMF.CodeSB")
+    client.config = desired
+    result = run(device(client).ensure_intercom_configuration(requested, apply=True))
+    assert result["verdict"] == "unsupported-firmware"
+    assert not client.sets

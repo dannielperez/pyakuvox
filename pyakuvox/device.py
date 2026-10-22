@@ -830,6 +830,8 @@ class AkuvoxDevice:
         if registration_period is not None:
             wants["reg_timeout"] = str(registration_period)
             wants["reg_timeout2"] = str(registration_period)
+        info = await self.info()
+        spa_sip = info.identity.model.upper() == "S535"
         before = {name: cfg.get(keys[name]) for name in wants if name != "password"}
         before["password_set"] = bool(cfg.get(keys["password"]))
 
@@ -837,7 +839,7 @@ class AkuvoxDevice:
         plan: dict[str, str] = {}
         for name, want in wants.items():
             have = "" if cfg.get(keys[name]) is None else str(cfg[keys[name]])
-            if have == want:
+            if have == want and not (spa_sip and name == "password"):
                 continue
             diff[keys[name]] = want
             plan[name] = (
@@ -868,7 +870,28 @@ class AkuvoxDevice:
                 "envelope (action=edit, '<value>&<cfgId>&<keyNum>'), not flat set",
             )
 
-        await self.set_config(diff)
+        if spa_sip:
+            from pyakuvox.clients.local.encoding import encode_config_password_webapi
+            from pyakuvox.clients.local.webapi import WebApiClient
+
+            settings = getattr(self._ensure_client(), "_settings", None)
+            if settings is None:
+                raise DeviceError("S535 SIP preparation requires local connection settings")
+            # Native API writes echo the raw password but do not establish the
+            # SIP credential on this firmware. Use the SPA's encoded write.
+            diff[keys["password"]] = encode_config_password_webapi(password)
+            async with WebApiClient(
+                settings.host,
+                port=settings.port,
+                use_ssl=settings.use_ssl,
+                verify_ssl=settings.verify_ssl,
+                timeout=settings.timeout,
+            ) as web:
+                await web.login(settings.username, settings.password.get_secret_value())
+                await web.set_sip_config(diff)
+            self._config_cache = None
+        else:
+            await self.set_config(diff)
         after_cfg = await self.get_config()
         verified = all(
             str(after_cfg.get(keys[name], "")) == want

@@ -1131,3 +1131,50 @@ def test_spa_credential_alignment_routes_by_authenticated_model(monkeypatch):
     align.assert_awaited_once_with("operator", "new-secret", apply=True)
     assert result["applied"]
     assert dev._client.sets == []
+
+
+def test_s535_sip_uses_encoded_web_write_even_when_raw_password_matches():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+
+    from pyakuvox.clients.local.encoding import encode_config_password_webapi
+    from pyakuvox.config import LocalSettings
+
+    client = FakeClient(_multi_account_config())
+    client._settings = LocalSettings(
+        host=DEVICE_HOST, username="admin", password="saved-web-password", port=443, use_ssl=True
+    )
+    client.get_device_info = AsyncMock(
+        return_value=SimpleNamespace(identity=SimpleNamespace(model="S535"))
+    )
+    dev = AkuvoxDevice(DeviceIdentity(host=DEVICE_HOST), client)
+    web = AsyncMock()
+
+    async def write(config):
+        client._config.update(config)
+
+    web.set_sip_config.side_effect = write
+    with patch("pyakuvox.clients.local.webapi.WebApiClient") as cls:
+        cls.return_value.__aenter__ = AsyncMock(return_value=web)
+        cls.return_value.__aexit__ = AsyncMock(return_value=None)
+        result = _run(
+            dev.set_sip_account(
+                2, server=PRIMARY, username="1001", password="new-secret", apply=True
+            )
+        )
+        # Even an API that echoes the desired raw password cannot prove that
+        # the SIP engine decoded it. The write must still use SPA encoding.
+        client._config["Config.Account2.GENERAL.Pwd"] = "new-secret"
+        dev._config_cache = None
+        result = _run(
+            dev.set_sip_account(
+                2, server=PRIMARY, username="1001", password="new-secret", apply=True
+            )
+        )
+    assert result["verdict"] == "set-verified"
+    assert web.set_sip_config.await_count == 2
+    assert not client.sets
+    assert web.set_sip_config.await_args.args[0][
+        "Config.Account2.GENERAL.Pwd"
+    ] == encode_config_password_webapi("new-secret")
+    assert "new-secret" not in str(result)
