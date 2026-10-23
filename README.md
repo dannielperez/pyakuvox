@@ -287,3 +287,21 @@ local registration verification and rollback status. Unknown/ambiguous outcomes
 require inspection; do not retry blindly. A local registration status does not
 prove two-way speech. Firmware must support the local configuration and call-state
 APIs; validate on an approved canary before enabling recovery across a fleet.
+
+
+### Bounded native system-log export
+
+`pyakuvox.diagnostic_exports.export_system_log(settings, expected_mac=..., max_bytes=...)`
+exports current logs from the observed R29 FCGI diagnostics layout. The default
+limit is 1 MiB (maximum 8 MiB), with a 25-second overall deadline (maximum 60).
+The operation verifies hardware identity before and after the transfer and rejects
+unsafe download paths, redirects, login HTML, oversized and invalid archives.
+Some R29 firmware returns plain TAR despite the `PhoneLog.tgz` suffix; consumers
+must not assume gzip from the filename. No archive is extracted by the SDK.
+
+The returned `DiagnosticArtifact` contains private bytes excluded from its repr,
+plus identity, firmware, size via `len(data)`, and SHA-256. Consumers must provide
+access controls, encrypted storage and retention. Never serialize the complete DTO
+into ordinary logs. The operation does not change log level, start packet capture,
+export configuration, reboot, or retry a failed export. Other model layouts are
+unsupported until independently verified.
