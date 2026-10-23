@@ -121,3 +121,36 @@ async def read_device_info_with_auth_detection(settings: LocalSettings) -> Devic
             return await client.get_device_info()
 
     return await asyncio.wait_for(read(), timeout=min(float(settings.timeout), 30.0))
+
+
+async def inspect_sip_with_auth_detection(
+    settings: LocalSettings, *, timeout_seconds: float = 25
+) -> dict[str, Any]:
+    """Read SIP evidence with a bounded Basic-to-Digest compatibility fallback.
+
+    Reuse credentials and transport. Only an explicit Basic rejection permits
+    Digest; timeouts/device errors propagate. This operation never renews a SIP
+    flow or changes configuration, and every client disables transport retries.
+    """
+    import asyncio
+
+    from pyakuvox.clients.local.client import LocalClient
+    from pyakuvox.config import LocalAuthType
+    from pyakuvox.exceptions import AuthenticationError
+    from pyakuvox.sip_recovery import inspect_sip
+
+    if not 0 < timeout_seconds <= 30:
+        raise ValueError("SIP inspection deadline must be within 30 seconds")
+
+    async def read():
+        try:
+            async with LocalClient(settings, max_retries=0) as client:
+                return await inspect_sip(client)
+        except AuthenticationError:
+            if settings.auth_type != LocalAuthType.BASIC:
+                raise
+        detected = settings.model_copy(update={"auth_type": LocalAuthType.DIGEST})
+        async with LocalClient(detected, max_retries=0) as client:
+            return await inspect_sip(client)
+
+    return await asyncio.wait_for(read(), timeout=timeout_seconds)
