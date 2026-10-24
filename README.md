@@ -305,3 +305,12 @@ access controls, encrypted storage and retention. Never serialize the complete D
 into ordinary logs. The operation does not change log level, start packet capture,
 export configuration, reboot, or retry a failed export. Other model layouts are
 unsupported until independently verified.
+
+### Bounded native status reads
+
+`pyakuvox.operations.read_status_with_auth_detection(settings)` returns device
+identity and explicit relay states under one total deadline (at most 30 seconds).
+A rejected Basic read may fall back to Digest using the same credentials and
+transport. Parse, transport, and device errors propagate; configuration and relay
+outputs are never changed. Clients disable transport retries. A successful result
+establishes readable status, not call delivery, acoustic audio, or restart safety.

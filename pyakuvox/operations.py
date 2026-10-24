@@ -154,3 +154,35 @@ async def inspect_sip_with_auth_detection(
             return await inspect_sip(client)
 
     return await asyncio.wait_for(read(), timeout=timeout_seconds)
+
+
+async def read_status_with_auth_detection(
+    settings: LocalSettings,
+) -> tuple[DeviceInfo, list[Any]]:
+    """Read identity and relays under one deadline using read-only auth detection.
+
+    A rejected Basic read may retry with Digest and the same credentials. Parse,
+    transport and device errors never trigger a fallback. Neither settings nor
+    device configuration are modified; transport retries are disabled.
+    """
+    import asyncio
+
+    from pyakuvox.clients.local.client import LocalClient
+    from pyakuvox.config import LocalAuthType
+    from pyakuvox.exceptions import AuthenticationError
+
+    async def read():
+        async def attempt(selected):
+            async with LocalClient(selected, max_retries=0) as client:
+                info = await client.get_device_info()
+                relays = await client.get_relay_status()
+                return info, relays
+
+        try:
+            return await attempt(settings)
+        except AuthenticationError:
+            if settings.auth_type != LocalAuthType.BASIC:
+                raise
+        return await attempt(settings.model_copy(update={"auth_type": LocalAuthType.DIGEST}))
+
+    return await asyncio.wait_for(read(), timeout=min(float(settings.timeout), 30.0))
