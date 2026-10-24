@@ -223,6 +223,39 @@ class LocalClient(AkuvoxClientBase):
                 log.error("request_timeout", error=str(exc), attempts=attempt)
                 raise TimeoutError(f"Request to {path} timed out after {attempt} attempt(s)") from exc
 
+            # Some panels acknowledge Digest over HTTP, then send an empty 308
+            # to HTTPS. Follow only a same-device, same-resource GET upgrade.
+            # Never replay writes or forward credentials to a redirected host.
+            if response.status_code in {301, 302, 303, 307, 308}:
+                original = response.request.url
+                location = response.headers.get("location", "")
+                try:
+                    target = original.join(location)
+                except (httpx.InvalidURL, ValueError) as exc:
+                    raise DeviceError("Invalid device HTTPS redirect") from exc
+                if not (
+                    method == "GET"
+                    and location
+                    and original.scheme == "http"
+                    and original.host == self._settings.host
+                    and target.scheme == "https"
+                    and target.host == original.host
+                    and target.port in (None, 443)
+                    and not target.userinfo
+                    and not target.fragment
+                    and target.path == original.path
+                    and target.query == original.query
+                ):
+                    raise DeviceError("Device redirect requires verified management transport")
+                try:
+                    response = await self._client.request("GET", target)
+                except httpx.TimeoutException as exc:
+                    raise TimeoutError("Device HTTPS redirect timed out") from exc
+                except httpx.RequestError as exc:
+                    raise ConnectionError("Device HTTPS redirect failed") from exc
+                if response.status_code in {301, 302, 303, 307, 308}:
+                    raise DeviceError("Chained device redirects are not supported")
+
             log.debug(
                 "response_received",
                 status=response.status_code,

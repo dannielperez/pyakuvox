@@ -278,3 +278,23 @@ def test_unknown_registration_cannot_verify_a_port_renewal(panel):
     assert result["verified"] is False
     assert result["rollback"] == "verified"
     assert len(writes) == 2
+
+
+@pytest.mark.parametrize("state", ["Talking", "Ringing", "Calling", "unknown", None, 0, {}])
+def test_native_mixed_case_and_unknown_states_never_admit_renewal(panel, state):
+    client, _, writes = panel
+    client.state = state
+    report = asyncio.run(recovery.inspect_sip(client))
+    assert report["call_state"] == (
+        state.upper() if state in ["Talking", "Ringing", "Calling"] else "UNKNOWN"
+    )
+    with pytest.raises(ValueError, match="active or unknown"):
+        asyncio.run(renew(client))
+    assert not writes
+
+
+def test_native_ready_case_uses_same_continuous_idle_gate(panel):
+    client, _, writes = panel
+    client.state = "Ready"
+    assert asyncio.run(renew(client))["verified"]
+    assert len(writes) == 1

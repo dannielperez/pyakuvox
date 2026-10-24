@@ -11,6 +11,12 @@ def _data(value):
     return value.get("data", value) if isinstance(value, dict) else {}
 
 
+def _call_state(value):
+    raw = _data(value).get("Status")
+    state = raw.strip().upper() if isinstance(raw, str) else "UNKNOWN"
+    return state if state in {"READY", "CALLING", "RINGING", "TALKING"} else "UNKNOWN"
+
+
 def _mac(value):
     return "".join(c for c in str(value).lower() if c in "0123456789abcdef")
 
@@ -93,7 +99,7 @@ async def inspect_sip(client):
             account["udp_recovery_reason"] = "UDP port renewal configuration is supported"
     return {
         "mac": info.identity.normalized_mac(),
-        "call_state": str(call.get("Status", "UNKNOWN"))[:30],
+        "call_state": _call_state(call),
         "accounts": accounts,
     }
 
@@ -117,7 +123,7 @@ async def renew_udp_flow(client, *, slot, username, server, mac):
         port = _renewal_port(baseline["accounts"], account)
         started = time.monotonic()
         while True:
-            if _data(await client._get("/api/call/status")).get("Status") != "READY":
+            if _call_state(await client._get("/api/call/status")) != "READY":
                 raise ValueError("Panel call state is active or unknown; no change sent")
             if time.monotonic() - started >= 60:
                 break

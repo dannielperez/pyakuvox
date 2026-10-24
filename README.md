@@ -314,3 +314,15 @@ A rejected Basic read may fall back to Digest using the same credentials and
 transport. Parse, transport, and device errors propagate; configuration and relay
 outputs are never changed. Clients disable transport retries. A successful result
 establishes readable status, not call delivery, acoustic audio, or restart safety.
+
+HTTP-only management records can encounter an empty 308 response on panels that
+require HTTPS. Local API GETs support one HTTPS upgrade to the same host, default
+HTTPS port, path and query; redirects to another host, resource, port or another
+redirect are rejected. Mutations are never replayed across redirects. Existing
+TLS verification settings are preserved. Prefer saving the verified HTTPS transport
+in the consumer's device record after diagnosis.
+
+SIP inspection normalizes documented native `Ready`, `Calling`, `Ringing` and
+`Talking` states to uppercase. Unrecognized/non-string states stay `UNKNOWN` and
+cannot authorize UDP renewal. Casing compatibility does not establish all-account
+idleness or prove that a busy panel is stuck.
