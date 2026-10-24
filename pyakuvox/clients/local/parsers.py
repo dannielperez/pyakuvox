@@ -7,6 +7,7 @@ source code (verified against real device responses).
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any
 
@@ -24,7 +25,6 @@ from pyakuvox.models.events import (
     DoorEvent,
     EventSource,
     EventType,
-    RelayActionResult,
 )
 from pyakuvox.models.firmware import FirmwareInfo
 from pyakuvox.models.schedules import Schedule, ScheduleType
@@ -93,21 +93,40 @@ def parse_firmware_info(data: dict[str, Any]) -> FirmwareInfo:
     )
 
 
-def parse_relay_status(data: dict[str, Any]) -> list[RelayState]:
-    """Parse relay status response → list of RelayState."""
-    relays: list[RelayState] = []
-    # Response shape varies; handle both list and dict formats
+def parse_relay_status(data: dict[str, Any] | list[Any]) -> list[RelayState]:
+    """Read explicit relay identities, never assign outputs by response order."""
+    if isinstance(data, dict) and "data" in data:
+        data = data["data"]
+    if not isinstance(data, (dict, list)):
+        raise ParseError("Expected relay status object or list")
+    relays: dict[int, RelayState] = {}
     if isinstance(data, list):
-        for item in data:
-            relays.append(RelayState(
-                number=int(item.get("number", 0)),
-                state=item.get("state"),
-            ))
-    elif isinstance(data, dict):
+        entries = [
+            (item.get("number"), item.get("state")) for item in data if isinstance(item, dict)
+        ]
+        if len(entries) != len(data):
+            raise ParseError("Invalid relay status entry")
+    else:
+        entries = []
         for key, value in data.items():
-            if key.startswith("Relay") or key.startswith("relay"):
-                relays.append(RelayState(number=len(relays) + 1, state=str(value)))
-    return relays
+            if not key.lower().startswith("relay"):
+                continue
+            match = re.fullmatch(r"relay([a-p]|[1-9]|1[0-6])", key, re.IGNORECASE)
+            if not match:
+                raise ParseError("Unrecognized relay identity")
+            suffix = match.group(1)
+            number = ord(suffix.upper()) - ord("A") + 1 if suffix.isalpha() else int(suffix)
+            entries.append((number, value))
+    for number, value in entries:
+        if isinstance(number, bool) or not str(number).isdigit():
+            raise ParseError("Invalid relay number")
+        number = int(number)
+        if not 1 <= number <= 16 or number in relays:
+            raise ParseError("Invalid or duplicate relay identity")
+        if value is not None and not isinstance(value, (str, int, float, bool)):
+            raise ParseError("Invalid relay state")
+        relays[number] = RelayState(number=number, state=None if value is None else str(value))
+    return [relays[number] for number in sorted(relays)]
 
 
 def parse_users(data: list[dict[str, Any]]) -> list[UserCode]:
