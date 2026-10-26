@@ -101,7 +101,9 @@ async def test_export_checks_identity_and_bounded_stream(case):
                 )
                 assert result.data == payload
             else:
-                with pytest.raises(ValueError):
+                from pyakuvox.diagnostic_exports import DiagnosticExportBusyError
+
+                with pytest.raises(DiagnosticExportBusyError if case == "busy" else ValueError):
                     await export_system_log(
                         LocalSettings(host="192.0.2.1"),
                         expected_mac="00:11:22:33:44:55",
@@ -111,3 +113,133 @@ async def test_export_checks_identity_and_bounded_stream(case):
                 web.login.assert_not_called()
         finally:
             await client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    [
+        "ok",
+        "identity",
+        "changed_identity",
+        "oversized",
+        "html",
+        "redirect",
+        "failed",
+        "busy",
+        "missing_code",
+        "bool_code",
+        "missing_path",
+        "foreign_path",
+        "traversal",
+    ],
+)
+async def test_s539_uses_only_native_system_log_export(case):
+    payload = gzip.compress(b"native system log") if case != "html" else b"<html>login</html>"
+    web = MagicMock()
+    web.base_url = "https://192.0.2.1:443"
+    web.login = AsyncMock()
+    body = {"retcode": 0, "data": {"url": "/download/systemlog.tgz"}}
+    if case == "failed":
+        body["retcode"] = -1
+    elif case == "busy":
+        body["retcode"] = -101
+    elif case == "missing_code":
+        del body["retcode"]
+    elif case == "bool_code":
+        body["retcode"] = False
+    elif case == "missing_path":
+        body["data"] = {}
+    elif case == "foreign_path":
+        body["data"]["url"] = "https://elsewhere/download/file"
+    elif case == "traversal":
+        body["data"]["url"] = "/download/%2e%2e/file"
+    web._post = AsyncMock(return_value=httpx.Response(200, json=body))
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(
+            302 if case == "redirect" else 200,
+            content=payload,
+            headers={"location": "https://elsewhere/private"} if case == "redirect" else {},
+        )
+
+    # Match the SPA session: redirect following is normally enabled there.
+    client = httpx.AsyncClient(transport=httpx.MockTransport(respond), follow_redirects=True)
+    web._ensure_client.return_value = client
+    context = MagicMock()
+    context.__aenter__ = AsyncMock(return_value=web)
+    context.__aexit__ = AsyncMock(return_value=None)
+    info = SimpleNamespace(
+        identity=SimpleNamespace(
+            model="S539",
+            normalized_mac=lambda: "WRONG" if case == "identity" else "00:11:22:33:44:55",
+        ),
+        firmware_version="539.30.10.523",
+    )
+    changed = SimpleNamespace(identity=SimpleNamespace(normalized_mac=lambda: "CHANGED"))
+    with (
+        patch("pyakuvox.diagnostic_exports.WebApiClient", return_value=context),
+        patch("pyakuvox.diagnostic_exports.WebUIClient") as legacy,
+        patch(
+            "pyakuvox.diagnostic_exports.read_device_info_with_auth_detection",
+            AsyncMock(side_effect=[info, changed if case == "changed_identity" else info]),
+        ),
+    ):
+        try:
+            if case == "ok":
+                artifact = await export_system_log(
+                    LocalSettings(host="192.0.2.1"),
+                    expected_mac="00:11:22:33:44:55",
+                )
+                assert artifact.data == payload
+                assert artifact.model == "S539"
+            else:
+                from pyakuvox.diagnostic_exports import DiagnosticExportBusyError
+
+                with pytest.raises(DiagnosticExportBusyError if case == "busy" else ValueError):
+                    await export_system_log(
+                        LocalSettings(host="192.0.2.1"),
+                        expected_mac="00:11:22:33:44:55",
+                        max_bytes=4 if case == "oversized" else 1024,
+                    )
+            legacy.assert_not_called()
+            if case == "identity":
+                web.login.assert_not_called()
+            else:
+                web.login.assert_awaited_once_with("admin", "admin", encoding="cryptojs_aes")
+                web._post.assert_awaited_once_with(
+                    "/api/web/upgrade_advance/export",
+                    {
+                        "target": "upgrade_advance",
+                        "action": "export",
+                        "data": {"type": "systemlog"},
+                    },
+                )
+            if case == "redirect":
+                assert len(requests) == 1
+        finally:
+            await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_unverified_s539_firmware_does_not_submit_web_credentials():
+    from pyakuvox.exceptions import UnsupportedFeatureError
+
+    info = SimpleNamespace(
+        identity=SimpleNamespace(model="S539", normalized_mac=lambda: "00:11:22:33:44:55"),
+        firmware_version="539.99.0.1",
+    )
+    with (
+        patch(
+            "pyakuvox.diagnostic_exports.read_device_info_with_auth_detection",
+            AsyncMock(return_value=info),
+        ),
+        patch("pyakuvox.diagnostic_exports.WebApiClient") as web,
+    ):
+        with pytest.raises(UnsupportedFeatureError):
+            await export_system_log(
+                LocalSettings(host="192.0.2.1"), expected_mac="00:11:22:33:44:55"
+            )
+        web.assert_not_called()

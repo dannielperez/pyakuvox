@@ -10,7 +10,8 @@ Protocol (reverse-engineered from the S535 SPA bundle):
 
   1. POST /api/web/login/set    {target:login,action:set}              -> data.encrypt (nonce)
   2. POST /api/web/login/login  {..,data:{userName,password}}          -> data.token
-       password = Base64(nonce + web_password)
+       password = Base64(nonce + web_password) by default; verified S539 firmware
+       uses CryptoJS AES(JSON.stringify(web_password), nonce), explicitly selected.
   3. send the token as a ``token`` cookie on every subsequent call
   4. POST /api/web/config/get   {..,data:{item:[<keys>]}}              -> data{key:val}
   5. POST /api/web/config/set   {..,data:{<key>:<val>,...}}            -> retcode 0
@@ -28,12 +29,15 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import httpx
 import structlog
 
-from pyakuvox.clients.local.encoding import encode_config_password_webapi
+from pyakuvox.clients.local.encoding import (
+    encode_config_password_webapi,
+    encode_login_password_spa_aes,
+)
 from pyakuvox.clients.local.webui import FirmwareAuthMode, HttpApiConfig
 from pyakuvox.exceptions import (
     AmbiguousMutationError,
@@ -119,8 +123,18 @@ class WebApiClient:
 
     # ── Login ───────────────────────────────────────────────────────
 
-    async def login(self, username: str, password: str) -> str:
+    async def login(
+        self,
+        username: str,
+        password: str,
+        *,
+        encoding: Literal["base64", "cryptojs_aes"] = "base64",
+    ) -> str:
         """Token-login to the SPA web API; returns the session token.
+
+        Select ``cryptojs_aes`` only for firmware whose SPA advertises AES of
+        JSON.stringify(password), as observed on S539 539.30.10.523. There is
+        no credential retry or automatic encoding fallback.
 
         Retries with backoff when the login endpoint throttles (``401`` on
         ``/api/web/login/set``). Raises after ``_LOGIN_RETRIES`` attempts.
@@ -129,6 +143,8 @@ class WebApiClient:
             AuthenticationError: bad credentials, or throttled past the retries.
             ConnectionError: device unreachable.
         """
+        if encoding not in {"base64", "cryptojs_aes"}:
+            raise ValueError("Unsupported SPA login encoding")
         log = logger.bind(host=self._host)
         last = ""
         for attempt in range(1, _LOGIN_RETRIES + 1):
@@ -137,7 +153,11 @@ class WebApiClient:
                 nonce = (r.json().get("data") or {}).get("encrypt", "")
                 if not nonce:
                     raise AuthenticationError(f"No login nonce from {self._host}")
-                enc = base64.b64encode((nonce + password).encode("utf-8")).decode("ascii")
+                enc = (
+                    encode_login_password_spa_aes(nonce, password)
+                    if encoding == "cryptojs_aes"
+                    else base64.b64encode((nonce + password).encode("utf-8")).decode("ascii")
+                )
                 lr = await self._post(
                     "/api/web/login/login",
                     {
