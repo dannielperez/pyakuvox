@@ -20,6 +20,6 @@ blocked, malformed ports/authorities are sanitized, and existing bounds hold.
 Live evidence: an S539 returned a same-device absolute HTTP /download/PhoneLog.tgz
 URL with retcode 0. The earlier client rejected that URL. A later export reported
 busy. A direct read of the previously generated file over HTTPS returned 200
-application/x-tgz but failed archive validation. Successful end-to-end export
+application/x-tgz but was rejected before archive validation completed. Successful end-to-end export
 remains unverified; do not relax archive validation or claim the call defect is
 fixed. No device settings, firmware, restart, logging level or trace changes.
