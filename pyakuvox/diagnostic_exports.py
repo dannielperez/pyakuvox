@@ -11,6 +11,7 @@ import hashlib
 import tarfile
 import zlib
 from dataclasses import dataclass, field
+from enum import StrEnum
 from html.parser import HTMLParser
 from io import BytesIO
 from typing import TYPE_CHECKING
@@ -26,6 +27,23 @@ if TYPE_CHECKING:
 
 PAGE = "id=6&id=2"
 MAX_BYTES = 8 * 1024 * 1024
+
+
+class DiagnosticExportFailure(StrEnum):
+    IDENTITY = "identity_mismatch"
+    PATH = "unsafe_download_path"
+    RESPONSE = "export_response_rejected"
+    DOWNLOAD = "download_failed"
+    SIZE = "artifact_size_limit"
+    ARCHIVE = "invalid_archive"
+
+
+class DiagnosticExportError(ValueError):
+    """Stable sanitized failure reason; never includes device response content."""
+
+    def __init__(self, code: DiagnosticExportFailure):
+        self.code = DiagnosticExportFailure(code)
+        super().__init__(self.code.value)
 
 
 class DiagnosticExportBusyError(DeviceError):
@@ -78,7 +96,7 @@ def _safe_download_path(path: str) -> str:
         or "%" in decoded
         or any(ord(c) < 33 or ord(c) > 126 for c in path)
     ):
-        raise ValueError("No safe diagnostic download path was returned")
+        raise DiagnosticExportError(DiagnosticExportFailure.PATH)
     return path
 
 
@@ -102,7 +120,7 @@ async def export_system_log(
         info = await read_device_info_with_auth_detection(settings)
         mac = info.identity.normalized_mac()
         if mac != expected_mac.upper():
-            raise ValueError("Hardware identity does not match")
+            raise DiagnosticExportError(DiagnosticExportFailure.IDENTITY)
         if info.identity.model.upper() == "S539":
             if info.firmware_version != "539.30.10.523":
                 raise UnsupportedFeatureError("system_log_export", "unverified S539 firmware")
@@ -128,22 +146,22 @@ async def export_system_log(
                 f"{web.base_url}/fcgi/do?{PAGE}&Operation=GetDivContent&DivName=divExportLog"
             )
             if response.status_code != 200:
-                raise ValueError("Diagnostic export failed")
+                raise DiagnosticExportError(DiagnosticExportFailure.RESPONSE)
             path = export_path(response.text, "ExportLog")
             data = bytearray()
             async with web._ensure_client().stream(
                 "GET", web.base_url + path, follow_redirects=False
             ) as download:
                 if download.status_code != 200:
-                    raise ValueError("Diagnostic download failed")
+                    raise DiagnosticExportError(DiagnosticExportFailure.DOWNLOAD)
                 async for chunk in download.aiter_bytes():
                     if len(data) + len(chunk) > max_bytes:
-                        raise ValueError("Diagnostic artifact exceeds size limit")
+                        raise DiagnosticExportError(DiagnosticExportFailure.SIZE)
                     data.extend(chunk)
             _validate_log_archive(data)
             after = await read_device_info_with_auth_detection(settings)
             if after.identity.normalized_mac() != mac:
-                raise ValueError("Hardware identity changed during diagnostic export")
+                raise DiagnosticExportError(DiagnosticExportFailure.IDENTITY)
             payload = bytes(data)
             return DiagnosticArtifact(
                 kind="system_log",
@@ -161,9 +179,9 @@ def _validate_log_archive(data):
         try:
             inflater.decompress(bytes(data), 16 * 1024 * 1024)
         except zlib.error as exc:
-            raise ValueError("Invalid gzip log archive") from exc
+            raise DiagnosticExportError(DiagnosticExportFailure.ARCHIVE) from exc
         if not inflater.eof or inflater.unused_data:
-            raise ValueError("Truncated or oversized expanded log archive")
+            raise DiagnosticExportError(DiagnosticExportFailure.ARCHIVE)
     elif data[257:262] == b"ustar":
         # Some R29 firmware returns plain TAR with a .tgz filename.
         # Validate headers and bounds, never extract archive members.
@@ -177,13 +195,39 @@ def _validate_log_archive(data):
                         or member.size < 0
                         or member.offset_data + member.size > len(data)
                     ):
-                        raise ValueError("Invalid or oversized TAR log archive")
+                        raise DiagnosticExportError(DiagnosticExportFailure.ARCHIVE)
                 if not count:
-                    raise ValueError("Empty TAR log archive")
+                    raise DiagnosticExportError(DiagnosticExportFailure.ARCHIVE)
         except tarfile.TarError as exc:
-            raise ValueError("Invalid TAR log archive") from exc
+            raise DiagnosticExportError(DiagnosticExportFailure.ARCHIVE) from exc
     else:
-        raise ValueError("Expected a log archive, not an HTML/login response")
+        raise DiagnosticExportError(DiagnosticExportFailure.ARCHIVE)
+
+
+def _spa_download_path(value: str, host: str) -> str:
+    """S539 returns an absolute HTTP link even when its SPA uses HTTPS.
+
+    Match the SPA's same-origin download behavior without downgrading transport
+    or trusting a foreign authority. Only the validated download path is used.
+    """
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        raise DiagnosticExportError(DiagnosticExportFailure.PATH) from None
+    if parsed.scheme or parsed.netloc:
+        if (
+            parsed.scheme not in {"http", "https"}
+            or parsed.hostname != host.lower()
+            or parsed.username is not None
+            or parsed.password is not None
+            or port not in (None, 80, 443)
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise DiagnosticExportError(DiagnosticExportFailure.PATH)
+        value = parsed.path
+    return _safe_download_path(value)
 
 
 async def _export_spa_system_log(settings, info, mac, max_bytes):
@@ -203,7 +247,7 @@ async def _export_spa_system_log(settings, info, mac, max_bytes):
             {"target": "upgrade_advance", "action": "export", "data": {"type": "systemlog"}},
         )
         if response.status_code != 200:
-            raise ValueError("Diagnostic export failed")
+            raise DiagnosticExportError(DiagnosticExportFailure.RESPONSE)
         body = response.json()
         if isinstance(body, dict) and body.get("retcode") == -101:
             raise DiagnosticExportBusyError("Device reports a call in progress; export refused")
@@ -212,12 +256,12 @@ async def _export_spa_system_log(settings, info, mac, max_bytes):
             or type(body.get("retcode")) is not int
             or body["retcode"] != 0
         ):
-            raise ValueError("Diagnostic export was not successful")
+            raise DiagnosticExportError(DiagnosticExportFailure.RESPONSE)
         result = body.get("data")
         path = result.get("url") if isinstance(result, dict) else None
         if not isinstance(path, str):
-            raise ValueError("Diagnostic export has no download path")
-        path = _safe_download_path(path)
+            raise DiagnosticExportError(DiagnosticExportFailure.PATH)
+        path = _spa_download_path(path, settings.host)
         data = bytearray()
         async with web._ensure_client().stream(
             "GET",
@@ -225,15 +269,15 @@ async def _export_spa_system_log(settings, info, mac, max_bytes):
             follow_redirects=False,
         ) as download:
             if download.status_code != 200:
-                raise ValueError("Diagnostic download failed")
+                raise DiagnosticExportError(DiagnosticExportFailure.DOWNLOAD)
             async for chunk in download.aiter_bytes():
                 if len(data) + len(chunk) > max_bytes:
-                    raise ValueError("Diagnostic artifact exceeds size limit")
+                    raise DiagnosticExportError(DiagnosticExportFailure.SIZE)
                 data.extend(chunk)
         _validate_log_archive(data)
         after = await read_device_info_with_auth_detection(settings)
         if after.identity.normalized_mac() != mac:
-            raise ValueError("Hardware identity changed during diagnostic export")
+            raise DiagnosticExportError(DiagnosticExportFailure.IDENTITY)
         payload = bytes(data)
         return DiagnosticArtifact(
             kind="system_log",
