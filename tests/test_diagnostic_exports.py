@@ -121,6 +121,7 @@ async def test_export_checks_identity_and_bounded_stream(case):
     [
         "ok",
         "absolute_url",
+        "large_tar",
         "identity",
         "changed_identity",
         "oversized",
@@ -137,6 +138,13 @@ async def test_export_checks_identity_and_bounded_stream(case):
 )
 async def test_s539_uses_only_native_system_log_export(case):
     payload = gzip.compress(b"native system log") if case != "html" else b"<html>login</html>"
+    if case == "large_tar":
+        output = BytesIO()
+        with tarfile.open(fileobj=output, mode="w") as archive:
+            member = tarfile.TarInfo("system.log")
+            member.size = 9 * 1024 * 1024
+            archive.addfile(member, BytesIO(b"x" * member.size))
+        payload = output.getvalue()
     web = MagicMock()
     web.base_url = "https://192.0.2.1:443"
     web.login = AsyncMock()
@@ -191,10 +199,11 @@ async def test_s539_uses_only_native_system_log_export(case):
         ),
     ):
         try:
-            if case in {"ok", "absolute_url"}:
+            if case in {"ok", "absolute_url", "large_tar"}:
                 artifact = await export_system_log(
                     LocalSettings(host="192.0.2.1"),
                     expected_mac="00:11:22:33:44:55",
+                    max_bytes=16 * 1024 * 1024,
                 )
                 assert artifact.data == payload
                 assert artifact.model == "S539"

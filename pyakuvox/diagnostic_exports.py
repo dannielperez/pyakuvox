@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from pyakuvox.config import LocalSettings
 
 PAGE = "id=6&id=2"
-MAX_BYTES = 8 * 1024 * 1024
+MAX_BYTES = 16 * 1024 * 1024
 
 
 class DiagnosticExportFailure(StrEnum):

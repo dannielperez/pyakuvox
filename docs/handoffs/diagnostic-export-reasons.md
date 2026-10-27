@@ -13,7 +13,7 @@ for identity, path, export response, download, size and archive failures. Error
 messages contain only that fixed code, not response bodies, filenames or secrets.
 The existing busy exception remains distinct; it does not prove call state.
 
-Validation: 461 tests pass; Ruff and diff checks pass. Tests verify absolute HTTP
+Validation: 462 tests pass; Ruff and diff checks pass. Tests verify absolute HTTP
 export URLs are fetched over the configured HTTPS session, unsafe URLs remain
 blocked, malformed ports/authorities are sanitized, and existing bounds hold.
 
@@ -21,5 +21,7 @@ Live evidence: an S539 returned a same-device absolute HTTP /download/PhoneLog.t
 URL with retcode 0. The earlier client rejected that URL. A later export reported
 busy. A direct read of the previously generated file over HTTPS returned 200
 application/x-tgz but was rejected before archive validation completed. Successful end-to-end export
-remains unverified; do not relax archive validation or claim the call defect is
-fixed. No device settings, firmware, restart, logging level or trace changes.
+remains unverified; do not claim the call defect is fixed. Header/prefix
+inspection subsequently confirmed a 15,443,456-byte plain TAR. Raise the
+opt-in SDK maximum to 16 MiB (default unchanged), retaining archive validation
+and the 16 MiB expanded gzip limit. A synthetic TAR above 8 MiB is covered. No device settings, firmware, restart, logging level or trace changes.
