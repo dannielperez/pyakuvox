@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import os
 
 from cryptography.hazmat.primitives import padding
@@ -68,21 +69,30 @@ def encode_login_password_aes(
     Newer HTTPS-only FCGI firmware uses this flow instead of the older base64
     login encoding.
     """
+    return _cryptojs_aes(random_string, random_string + password, salt=salt)
+
+
+def encode_login_password_spa_aes(nonce: str, password: str, *, salt: bytes | None = None) -> str:
+    """Match S539 SPA CryptoJS.AES.encrypt(JSON.stringify(password), nonce)."""
+    return _cryptojs_aes(nonce, json.dumps(password, ensure_ascii=False), salt=salt)
+
+
+def _cryptojs_aes(passphrase: str, plaintext: str, *, salt: bytes | None) -> str:
     salt = os.urandom(8) if salt is None else salt
     if len(salt) != 8:
         raise ValueError("CryptoJS AES salt must be exactly 8 bytes")
 
-    passphrase = random_string.encode("utf-8")
+    passphrase_bytes = passphrase.encode("utf-8")
     derived = b""
     block = b""
     while len(derived) < 48:
-        block = hashlib.md5(block + passphrase + salt).digest()
+        block = hashlib.md5(block + passphrase_bytes + salt).digest()
         derived += block
     key, iv = derived[:32], derived[32:48]
 
     padder = padding.PKCS7(algorithms.AES.block_size).padder()
-    plaintext = (random_string + password).encode("utf-8")
-    padded = padder.update(plaintext) + padder.finalize()
+    plaintext_bytes = plaintext.encode("utf-8")
+    padded = padder.update(plaintext_bytes) + padder.finalize()
     encryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
     ciphertext = encryptor.update(padded) + encryptor.finalize()
     return base64.b64encode(b"Salted__" + salt + ciphertext).decode("ascii")

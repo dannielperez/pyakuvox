@@ -764,3 +764,48 @@ async def test_s535_homepage_account_requires_readback():
     result = await web.ensure_homepage_dial_account(2, apply=True)
     assert result["verdict"] == "set-did-not-stick"
     assert web._config_set.await_count == 1
+
+
+@pytest.mark.parametrize(
+    ("password", "expected"),
+    [
+        ("device-password", "U2FsdGVkX18AAQIDBAUGBxUF2Jfy6hLpBr/sN8eUzNDt5OhKSXYuJBSqFAMzJUfT"),
+        ('páss"\n🔑', "U2FsdGVkX18AAQIDBAUGBwB5RZ9A6xZCTD3U1c7hc8M="),
+    ],
+)
+def test_spa_aes_login_vectors(password, expected):
+    from pyakuvox.clients.local.encoding import encode_login_password_spa_aes
+
+    # Independent OpenSSL AES-256-CBC / MD5 vectors over JSON.stringify input.
+    assert (
+        encode_login_password_spa_aes(
+            "nonce-value", password, salt=bytes.fromhex("0001020304050607")
+        )
+        == expected
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("accepted", [True, False])
+async def test_spa_aes_submits_credentials_once_without_fallback(accepted):
+    async with WebApiClient("192.0.2.1") as web:
+        web._post = AsyncMock(
+            side_effect=[
+                _resp(body={"retcode": 0, "data": {"encrypt": "NONCE"}}),
+                _resp(body={"retcode": 0, "data": {"token": "TOKEN"}})
+                if accepted
+                else _resp(body={"retcode": -1}),
+            ]
+        )
+        with patch(
+            "pyakuvox.clients.local.webapi.encode_login_password_spa_aes", return_value="CIPHERTEXT"
+        ) as encode:
+            if accepted:
+                assert await web.login("admin", "password", encoding="cryptojs_aes") == "TOKEN"
+            else:
+                with pytest.raises(AuthenticationError):
+                    await web.login("admin", "password", encoding="cryptojs_aes")
+            encode.assert_called_once_with("NONCE", "password")
+        assert web._post.await_count == 2
+        assert web._post.call_args.kwargs == {}
+        assert web._post.call_args.args[1]["data"]["password"] == "CIPHERTEXT"
