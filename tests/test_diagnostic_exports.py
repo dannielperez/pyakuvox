@@ -120,6 +120,8 @@ async def test_export_checks_identity_and_bounded_stream(case):
     "case",
     [
         "ok",
+        "absolute_url",
+        "large_tar",
         "identity",
         "changed_identity",
         "oversized",
@@ -136,11 +138,20 @@ async def test_export_checks_identity_and_bounded_stream(case):
 )
 async def test_s539_uses_only_native_system_log_export(case):
     payload = gzip.compress(b"native system log") if case != "html" else b"<html>login</html>"
+    if case == "large_tar":
+        output = BytesIO()
+        with tarfile.open(fileobj=output, mode="w") as archive:
+            member = tarfile.TarInfo("system.log")
+            member.size = 9 * 1024 * 1024
+            archive.addfile(member, BytesIO(b"x" * member.size))
+        payload = output.getvalue()
     web = MagicMock()
     web.base_url = "https://192.0.2.1:443"
     web.login = AsyncMock()
     body = {"retcode": 0, "data": {"url": "/download/systemlog.tgz"}}
-    if case == "failed":
+    if case == "absolute_url":
+        body["data"]["url"] = "http://192.0.2.1/download/systemlog.tgz"
+    elif case == "failed":
         body["retcode"] = -1
     elif case == "busy":
         body["retcode"] = -101
@@ -188,13 +199,15 @@ async def test_s539_uses_only_native_system_log_export(case):
         ),
     ):
         try:
-            if case == "ok":
+            if case in {"ok", "absolute_url", "large_tar"}:
                 artifact = await export_system_log(
                     LocalSettings(host="192.0.2.1"),
                     expected_mac="00:11:22:33:44:55",
+                    max_bytes=16 * 1024 * 1024,
                 )
                 assert artifact.data == payload
                 assert artifact.model == "S539"
+                assert str(requests[0].url) == "https://192.0.2.1/download/systemlog.tgz"
             else:
                 from pyakuvox.diagnostic_exports import DiagnosticExportBusyError
 
@@ -243,3 +256,42 @@ async def test_unverified_s539_firmware_does_not_submit_web_credentials():
                 LocalSettings(host="192.0.2.1"), expected_mac="00:11:22:33:44:55"
             )
         web.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "http://192.0.2.1/download/PhoneLog.tgz",
+        "https://192.0.2.1/download/PhoneLog.tgz",
+        "/download/PhoneLog.tgz",
+    ],
+)
+def test_spa_export_link_uses_only_same_device_download_path(value):
+    from pyakuvox.diagnostic_exports import _spa_download_path
+
+    assert _spa_download_path(value, "192.0.2.1") == "/download/PhoneLog.tgz"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "http://foreign/download/PhoneLog.tgz",
+        "http://192.0.2.1@foreign/download/PhoneLog.tgz",
+        "http://user:secret@192.0.2.1/download/PhoneLog.tgz",
+        "http://192.0.2.1:9999/download/PhoneLog.tgz",
+        "http://192.0.2.1:invalid/download/PhoneLog.tgz",
+        "http://[invalid/download/PhoneLog.tgz",
+        "http://192.0.2.1/download/%2e%2e/private",
+        "http://192.0.2.1/download/PhoneLog.tgz?token=secret",
+        "http://192.0.2.1/download/PhoneLog.tgz#fragment",
+        "//192.0.2.1/download/PhoneLog.tgz",
+    ],
+)
+def test_spa_export_link_rejects_unsafe_authority_and_path(value):
+    from pyakuvox.diagnostic_exports import DiagnosticExportError, _spa_download_path
+
+    with pytest.raises(DiagnosticExportError) as caught:
+        _spa_download_path(value, "192.0.2.1")
+    assert caught.value.code == "unsafe_download_path"
+    assert str(caught.value) == "unsafe_download_path"
+    assert value not in str(caught.value)
