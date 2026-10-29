@@ -74,3 +74,19 @@ async def test_s535_status_and_homepage_use_spa_client():
     assert result is expected
     assert homepage["verdict"] == "set-verified"
     client.ensure_homepage_dial_account.assert_awaited_once_with(2, apply=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["R29C", "X916"])
+async def test_native_homepage_account_model_dispatch(model):
+    from pyakuvox.config import LocalSettings
+    from pyakuvox.operations import ensure_homepage_dial_account
+
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    client.ensure_fcgi_homepage_dial_account.return_value = {"verdict": "set-verified"}
+    settings = LocalSettings(host="192.0.2.10", username="admin", password="fixture")
+    with patch("pyakuvox.operations.WebUIClient", return_value=client):
+        result = await ensure_homepage_dial_account(settings, 2, model=model, apply=True)
+    assert result["verdict"] == "set-verified"
+    client.ensure_fcgi_homepage_dial_account.assert_awaited_once_with(2, apply=True)

@@ -84,7 +84,7 @@ async def ensure_homepage_dial_account(
         ) as web:
             await web.login(settings.username, settings.password.get_secret_value())
             return await web.ensure_homepage_dial_account(account, apply=apply)
-    if model.strip().upper() != "X916":
+    if model.strip().upper() not in {"X916", "R29C"}:
         raise UnsupportedFeatureError("homepage_dial_account", model)
     async with WebUIClient(
         host=settings.host,
@@ -95,7 +95,7 @@ async def ensure_homepage_dial_account(
         timeout=settings.timeout,
     ) as webui:
         await webui.login(settings.username, settings.password.get_secret_value())
-        return await webui.ensure_x916_homepage_dial_account(account, apply=apply)
+        return await webui.ensure_fcgi_homepage_dial_account(account, apply=apply)
 
 
 async def read_device_info_with_auth_detection(settings: LocalSettings) -> DeviceInfo:

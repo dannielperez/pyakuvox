@@ -160,7 +160,9 @@ class WebUIClient:
         from pyakuvox.clients.local.tls import pinned_client_options
 
         pinned = pinned_client_options(
-            host=self._host, port=self._port, use_ssl=self._scheme == "https",
+            host=self._host,
+            port=self._port,
+            use_ssl=self._scheme == "https",
             fingerprint=self._tls_certificate_sha256,
         )
         self._client = httpx.AsyncClient(
@@ -299,11 +301,17 @@ class WebUIClient:
     async def ensure_x916_homepage_dial_account(
         self, account: int, *, apply: bool = False
     ) -> dict[str, Any]:
-        """Select the X916 intercom homepage's outgoing SIP account.
+        """Compatibility alias for the native homepage selector."""
+        return await self.ensure_fcgi_homepage_dial_account(account, apply=apply)
+
+    async def ensure_fcgi_homepage_dial_account(
+        self, account: int, *, apply: bool = False
+    ) -> dict[str, Any]:
+        """Select the R29C/X916 intercom homepage's outgoing SIP account.
 
         The account selector is FCGI-only on firmware that omits it from the
         config API. It applies to the homepage, not the independent SIP account
-        credentials. The caller must establish the X916 model before use.
+        credentials. The caller must establish a supported model before use.
         """
         from pyakuvox.intercom import IntercomConfigurationVerdict as Verdict
 
@@ -335,7 +343,7 @@ class WebUIClient:
         ambiguous = None
         try:
             status = await self._write_page(
-                page, f"begin&cBuildingDialType={wanted}&SubmitData=end"
+                page, f"begin&Operation=Submit&cBuildingDialType={wanted}&SubmitData=end"
             )
             if status != 200:
                 raise DeviceError(f"Homepage account write returned HTTP {status}")
