@@ -46,7 +46,7 @@ async def test_x916_homepage_account_writes_only_selector_and_verifies():
     result = await client.ensure_x916_homepage_dial_account(2, apply=True)
     assert result["verdict"] == "set-verified"
     client._write_page.assert_awaited_once_with(
-        "id=130&id=19", "begin&cBuildingDialType=2&SubmitData=end"
+        "id=130&id=19", "begin&Operation=Submit&cBuildingDialType=2&SubmitData=end"
     )
 
 
