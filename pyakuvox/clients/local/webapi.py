@@ -93,7 +93,9 @@ class WebApiClient:
         from pyakuvox.clients.local.tls import pinned_client_options
 
         pinned = pinned_client_options(
-            host=self._host, port=self._port, use_ssl=self._scheme == "https",
+            host=self._host,
+            port=self._port,
+            use_ssl=self._scheme == "https",
             fingerprint=self._tls_certificate_sha256,
         )
         self._client = httpx.AsyncClient(
@@ -322,7 +324,25 @@ class WebApiClient:
             f"{rtsp}.Username": encode_config_password_webapi(username),
             f"{rtsp}.Password": encode_config_password_webapi(password),
         }
-        current = await self._config_get(list(config))
+        door = "Config.DoorSetting.RELAY"
+        door_fields = [
+            f"{door}.{key}"
+            for key in (
+                "RelayOnWeb",
+                "RelayOnWebUser",
+                "RelayOnWebPwd",
+            )
+        ]
+        current = await self._config_get([*config, *door_fields])
+        if current.get(door_fields[0]) == "1":
+            if not all(key in current for key in door_fields):
+                raise DeviceError(
+                    "Enabled HTTP-door credential fields unavailable; no write attempted"
+                )
+            if len(username) > 63 or len(password) > 31 or any(c in username for c in "&='%+#"):
+                raise ValueError("Credentials incompatible with enabled HTTP-door fields")
+            config[door_fields[1]] = encode_config_password_webapi(username)
+            config[door_fields[2]] = encode_config_password_webapi(password)
         if not all(key in current for key in config):
             raise DeviceError(
                 "SPA API/media configuration fields are unavailable; no write attempted"
