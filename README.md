@@ -326,3 +326,15 @@ SIP inspection normalizes documented native `Ready`, `Calling`, `Ringing` and
 `Talking` states to uppercase. Unrecognized/non-string states stay `UNKNOWN` and
 cannot authorize UDP renewal. Casing compatibility does not establish all-account
 idleness or prove that a busy panel is stuck.
+
+### Native R29C call-speaker volume
+
+`pyakuvox.speaker_volume.configure_speaker_volume(settings, expected_mac=...,
+level=13)` reads a preview without writing. The supported native contract is
+R29C firmware `29.30.10.203`. To apply, pass `apply=True` and the current level
+from the preview as `expected_level`. Levels are integers 1–15. The operation
+checks device identity, preserves microphone/prompt/alarm settings, never reboots
+or retries a write, and reports verification separately from submission. A
+concurrent change between the final read and device write remains possible;
+this is not an atomic device-side compare-and-swap. Confirm real-world audibility
+with a call after a verified change. Other firmware is refused until validated.
