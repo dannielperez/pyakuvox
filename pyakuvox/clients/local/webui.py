@@ -136,11 +136,13 @@ class WebUIClient:
         verify_ssl: bool = False,
         timeout: int = 15,
         password_encoding: ConfigPasswordEncoding = ConfigPasswordEncoding.X916,
+        tls_certificate_sha256: str | None = None,
     ) -> None:
         self._host = host
         self._port = port
         self._scheme = "https" if use_ssl else "http"
         self._verify_ssl = verify_ssl
+        self._tls_certificate_sha256 = tls_certificate_sha256
         self._timeout = timeout
         self._password_encoding = password_encoding
         self._client: httpx.AsyncClient | None = None
@@ -155,9 +157,16 @@ class WebUIClient:
         return self._session_id is not None
 
     async def __aenter__(self) -> WebUIClient:
+        from pyakuvox.clients.local.tls import pinned_client_options
+
+        pinned = pinned_client_options(
+            host=self._host, port=self._port, use_ssl=self._scheme == "https",
+            fingerprint=self._tls_certificate_sha256,
+        )
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(self._timeout),
             verify=self._verify_ssl,
+            **pinned,
             follow_redirects=False,
         )
         return self

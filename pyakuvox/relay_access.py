@@ -38,7 +38,7 @@ async def configure_web_relay_access(
     mode, hold times and output state are untouched. No retry follows a write.
     TLS trust must already be configured; this workflow never downgrades TLS.
     """
-    if not settings.use_ssl or settings.verify_ssl is not True:
+    if not settings.use_ssl or not (settings.verify_ssl is True or settings.tls_certificate_sha256):
         raise ValueError("Verified HTTPS is required for web relay preparation")
     if not settings.username or not settings.password.get_secret_value():
         raise ValueError("Saved credentials are required")
@@ -57,6 +57,7 @@ async def configure_web_relay_access(
         use_ssl=True,
         verify_ssl=True,
         timeout=min(float(settings.timeout), 10.0),
+        tls_certificate_sha256=settings.tls_certificate_sha256,
     )
     if profile.dialect == ApiDialect.WEB_API:
         web = WebApiClient(**options)

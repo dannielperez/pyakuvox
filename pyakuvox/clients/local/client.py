@@ -117,6 +117,15 @@ class LocalClient(AkuvoxClientBase):
         self._capability_matrix = build_default_matrix()
 
     async def __aenter__(self) -> LocalClient:
+        from pyakuvox.clients.local.tls import pinned_client_options
+
+        pinned = pinned_client_options(
+            host=self._settings.host, port=self._settings.port,
+            use_ssl=self._settings.use_ssl,
+            fingerprint=self._settings.tls_certificate_sha256,
+        )
+        if pinned and self._settings.legacy_tls:
+            raise ValueError("Pinned TLS cannot enable legacy TLS")
         verify: Any = self._settings.verify_ssl
         if getattr(self._settings, "legacy_tls", False) and self._settings.use_ssl:
             # Old Akuvox firmware negotiates weak DH / legacy ciphers that modern
@@ -140,6 +149,7 @@ class LocalClient(AkuvoxClientBase):
             auth=self._auth,
             timeout=httpx.Timeout(self._settings.timeout),
             verify=verify,
+            **pinned,
         )
         return self
 
