@@ -135,8 +135,8 @@ class WebUIClient:
         use_ssl: bool = False,
         verify_ssl: bool = False,
         timeout: int = 15,
-        tls_certificate_sha256: str | None = None,
         password_encoding: ConfigPasswordEncoding = ConfigPasswordEncoding.X916,
+        tls_certificate_sha256: str | None = None,
     ) -> None:
         self._host = host
         self._port = port
