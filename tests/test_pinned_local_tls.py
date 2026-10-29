@@ -136,3 +136,11 @@ async def test_all_local_clients_use_pin_transport(tmp_path, kind):
 def test_malformed_pin_fails_closed():
     with pytest.raises(ValueError, match="SHA-256"):
         PinnedLocalTransport(host="127.0.0.1", port=443, fingerprint="")
+
+
+def test_webui_positional_password_encoding_remains_compatible():
+    from pyakuvox.clients.local.webui import ConfigPasswordEncoding
+
+    client = WebUIClient("127.0.0.1", 443, True, True, 5, ConfigPasswordEncoding.X916)
+    assert client._password_encoding == ConfigPasswordEncoding.X916
+    assert client._tls_certificate_sha256 is None
