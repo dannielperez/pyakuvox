@@ -634,11 +634,22 @@ def _spa_fields():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("apply", [False, True])
-async def test_spa_media_alignment_encodes_fields_and_uses_onvif_interface(apply):
+@pytest.mark.parametrize("http_door", [False, True])
+async def test_spa_media_alignment_encodes_fields_and_uses_onvif_interface(apply, http_door):
     api, rtsp = "Config.DoorSetting.APIFCGI", "Config.DoorSetting.RTSP"
     async with WebApiClient("192.0.2.1") as web:
         web._token = "synthetic-session"
-        web._config_get = AsyncMock(return_value=_spa_fields())
+        fields = _spa_fields()
+        door = "Config.DoorSetting.RELAY"
+        if http_door:
+            fields.update(
+                {
+                    f"{door}.RelayOnWeb": "1",
+                    f"{door}.RelayOnWebUser": "old",
+                    f"{door}.RelayOnWebPwd": "old",
+                }
+            )
+        web._config_get = AsyncMock(return_value=fields)
         web._config_set = AsyncMock()
         web._client.get = AsyncMock(
             return_value=_resp(
@@ -661,6 +672,11 @@ async def test_spa_media_alignment_encodes_fields_and_uses_onvif_interface(apply
         assert config[f"{rtsp}.Username"] == base64.b64encode(b"operator").decode()
         assert config[f"{rtsp}.Password"] == base64.b64encode(b"new-password").decode()
         assert config[f"{api}.UserName"] == "operator"
+        if http_door:
+            assert config[f"{door}.RelayOnWebUser"] == base64.b64encode(b"operator").decode()
+            assert config[f"{door}.RelayOnWebPwd"] == base64.b64encode(b"new-password").decode()
+        assert f"{door}.RelayOnWeb" not in config
+
         path, payload = web._post.await_args.args
         assert path == "/api/web/commontool/set"
         assert payload["data"] == {
