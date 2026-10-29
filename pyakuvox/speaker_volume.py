@@ -74,6 +74,7 @@ async def configure_speaker_volume(
                 port=settings.port,
                 use_ssl=settings.use_ssl,
                 verify_ssl=settings.verify_ssl,
+                tls_certificate_sha256=getattr(settings, "tls_certificate_sha256", None),
                 timeout=min(float(settings.timeout), 5),
                 password_encoding=ConfigPasswordEncoding.R29C,
             ) as web:

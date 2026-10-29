@@ -70,11 +70,13 @@ class WebApiClient:
         use_ssl: bool = True,
         verify_ssl: bool = False,
         timeout: int = 15,
+        tls_certificate_sha256: str | None = None,
     ) -> None:
         self._host = host
         self._port = port
         self._scheme = "https" if use_ssl else "http"
         self._verify_ssl = verify_ssl
+        self._tls_certificate_sha256 = tls_certificate_sha256
         self._timeout = timeout
         self._client: httpx.AsyncClient | None = None
         self._token: str | None = None
@@ -88,9 +90,16 @@ class WebApiClient:
         return self._token is not None
 
     async def __aenter__(self) -> WebApiClient:
+        from pyakuvox.clients.local.tls import pinned_client_options
+
+        pinned = pinned_client_options(
+            host=self._host, port=self._port, use_ssl=self._scheme == "https",
+            fingerprint=self._tls_certificate_sha256,
+        )
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(self._timeout),
             verify=self._verify_ssl,
+            **pinned,
             follow_redirects=True,
             # S5xx firmware routes non-browser user agents through HTTP-API
             # Digest authentication even for the web login nonce endpoint.

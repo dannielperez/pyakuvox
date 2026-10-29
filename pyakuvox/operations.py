@@ -79,6 +79,7 @@ async def ensure_homepage_dial_account(
             port=settings.port,
             use_ssl=settings.use_ssl,
             verify_ssl=settings.verify_ssl,
+            tls_certificate_sha256=getattr(settings, "tls_certificate_sha256", None),
             timeout=settings.timeout,
         ) as web:
             await web.login(settings.username, settings.password.get_secret_value())
@@ -90,6 +91,7 @@ async def ensure_homepage_dial_account(
         port=settings.port,
         use_ssl=settings.use_ssl,
         verify_ssl=settings.verify_ssl,
+        tls_certificate_sha256=getattr(settings, "tls_certificate_sha256", None),
         timeout=settings.timeout,
     ) as webui:
         await webui.login(settings.username, settings.password.get_secret_value())
