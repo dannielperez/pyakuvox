@@ -118,7 +118,18 @@ async def test_insecure_transport_does_not_connect(clients, change):
     web.login.assert_not_called()
 
 
-@pytest.mark.parametrize("reply", ["Success", "<html>Login</html>", "", "OK"])
+@pytest.mark.parametrize(
+    "reply",
+    [
+        '{"retcode":0, "message":"OK"}',
+        "Success",
+        "<html>Login</html>",
+        "",
+        "OK",
+        '{"retcode":false,"message":"OK"}',
+        '{"retcode":1,"message":"OK"}',
+    ],
+)
 async def test_http_command_is_single_and_requires_explicit_ack(clients, reply):
     from pyakuvox.http_door import BASE, open_http_door
 
@@ -128,7 +139,7 @@ async def test_http_command_is_single_and_requires_explicit_ack(clients, reply):
         {BASE + "RelayADelay": "5", BASE + "RelayAMode": "0", BASE + "TriggerDelayA": "0"},
     ]
     local._client.get.return_value = SimpleNamespace(status_code=200, text=reply)
-    if reply == "Success":
+    if reply == '{"retcode":0, "message":"OK"}':
         result = await open_http_door(settings, model="S535", relay_number=1, pulse_seconds=5)
         assert result.success
         assert "physical position unverified" in result.message
@@ -205,7 +216,9 @@ async def test_http_transport_uses_digest_and_never_retries(status):
             )
         if status == "timeout":
             raise httpx.ReadTimeout("unknown outcome")
-        return httpx.Response(status, text="Success", headers={"Location": "/login"})
+        return httpx.Response(
+            status, text='{"retcode":0, "message":"OK"}', headers={"Location": "/login"}
+        )
 
     def client(**kwargs):
         return real_client(**kwargs, transport=httpx.MockTransport(respond))
@@ -228,3 +241,116 @@ async def test_http_transport_uses_digest_and_never_retries(status):
     assert all(
         "test-password" not in str(r.url) and "test-user" not in str(r.url) for r in requests
     )
+
+
+@pytest.mark.parametrize("apply", [False, True])
+async def test_s539_verified_schema_uses_aes_login_and_preserves_outputs(clients, apply):
+    from pyakuvox.http_door import S539_FIELDS
+
+    settings, local, web, _ = clients
+    local.get_device_info.return_value = SimpleNamespace(
+        identity=SimpleNamespace(model="S539"), firmware_version="539.30.10.523"
+    )
+    local.get_relay_status.return_value = [SimpleNamespace(number=n) for n in (1, 2, 3)]
+    before = dict.fromkeys(S539_FIELDS, "")
+    after = dict(
+        zip(
+            S539_FIELDS,
+            ("1", "0", settings.username, settings.password.get_secret_value()),
+            strict=True,
+        )
+    )
+    web._config_get.side_effect = [before, after]
+    result = await configure_http_door(settings, model="S539", relay_numbers=(2,), apply=apply)
+    web.login.assert_awaited_once_with(
+        settings.username, settings.password.get_secret_value(), encoding="cryptojs_aes"
+    )
+    assert result["selected_relays"] == [2]
+    assert result["opening_verified"] is False
+    if apply:
+        sent = web._config_set.call_args.args[0]
+        assert set(sent) == set(S539_FIELDS)
+        assert sent[S539_FIELDS[2]] == encode_config_password_webapi(settings.username)
+        assert sent[S539_FIELDS[3]] == encode_config_password_webapi(
+            settings.password.get_secret_value()
+        )
+        assert result["verified"]
+    else:
+        web._config_set.assert_not_called()
+    local.trigger_relay.assert_not_called()
+
+
+@pytest.mark.parametrize("fault", ["firmware", "inventory", "password", "selection"])
+async def test_s539_rejects_unverified_setup(clients, fault):
+    settings, local, web, _ = clients
+    local.get_device_info.return_value = SimpleNamespace(
+        identity=SimpleNamespace(model="S539"), firmware_version="539.30.10.523"
+    )
+    local.get_relay_status.return_value = [SimpleNamespace(number=n) for n in (1, 2, 3)]
+    selection = (1,)
+    if fault == "firmware":
+        local.get_device_info.return_value.firmware_version = "539.30.10.999"
+    elif fault == "inventory":
+        local.get_relay_status.return_value = [SimpleNamespace(number=1)]
+    elif fault == "password":
+        settings = settings.model_copy(
+            update={"password": __import__("pydantic").SecretStr("weak")}
+        )
+    else:
+        selection = (4,)
+    with pytest.raises((ValueError, DeviceError)):
+        await configure_http_door(settings, model="S539", relay_numbers=selection, apply=True)
+    web._config_set.assert_not_called()
+    local.trigger_relay.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "body,valid",
+    [
+        ('{"retcode":0, "message":"OK"}', True),
+        ('{"retcode":false,"message":"OK"}', False),
+        ('{"retcode":1,"message":"OK"}', False),
+        ('{"retcode":0,"message":"Failed"}', False),
+        ('{"retcode":0,"message":"OK","other":1}', False),
+        ("Success", False),
+        ("<html>login</html>", False),
+    ],
+)
+async def test_s539_live_ack_contract(clients, body, valid):
+    from pyakuvox.http_door import BASE, S539_FIELDS, open_http_door
+
+    settings, local, web, _ = clients
+    local.get_device_info.return_value = SimpleNamespace(
+        identity=SimpleNamespace(model="S539"), firmware_version="539.30.10.523"
+    )
+    local.get_relay_status.return_value = [SimpleNamespace(number=n) for n in (1, 2, 3)]
+    web._config_get.side_effect = [
+        dict(
+            zip(
+                S539_FIELDS,
+                ("1", "0", settings.username, settings.password.get_secret_value()),
+                strict=True,
+            )
+        ),
+        {BASE + "HoldDelayA": "5", BASE + "ModeA": "0", BASE + "TriggerDelayA": "0"},
+    ]
+    local._client.get.return_value = SimpleNamespace(status_code=200, text=body)
+    if valid:
+        assert (
+            await open_http_door(settings, model="S539", relay_number=1, pulse_seconds=5)
+        ).success
+    else:
+        with pytest.raises(AmbiguousMutationError):
+            await open_http_door(settings, model="S539", relay_number=1, pulse_seconds=5)
+    assert local._client.get.await_count == 1
+    local.trigger_relay.assert_not_called()
+    web._config_set.assert_not_called()
+
+
+async def test_s539_unverified_output_never_actuates(clients):
+    from pyakuvox.http_door import open_http_door
+
+    settings, local, _, _ = clients
+    with pytest.raises(ValueError):
+        await open_http_door(settings, model="S539", relay_number=2, pulse_seconds=5)
+    local._client.get.assert_not_called()
