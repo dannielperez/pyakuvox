@@ -116,3 +116,115 @@ async def test_insecure_transport_does_not_connect(clients, change):
         )
     local.get_device_info.assert_not_called()
     web.login.assert_not_called()
+
+
+@pytest.mark.parametrize("reply", ["Success", "<html>Login</html>", "", "OK"])
+async def test_http_command_is_single_and_requires_explicit_ack(clients, reply):
+    from pyakuvox.http_door import BASE, open_http_door
+
+    settings, local, web, after = clients
+    web._config_get.side_effect = [
+        after,
+        {BASE + "RelayADelay": "5", BASE + "RelayAMode": "0", BASE + "TriggerDelayA": "0"},
+    ]
+    local._client.get.return_value = SimpleNamespace(status_code=200, text=reply)
+    if reply == "Success":
+        result = await open_http_door(settings, model="S535", relay_number=1, pulse_seconds=5)
+        assert result.success
+        assert "physical position unverified" in result.message
+    else:
+        with pytest.raises(AmbiguousMutationError):
+            await open_http_door(settings, model="S535", relay_number=1, pulse_seconds=5)
+    local._client.get.assert_awaited_once_with(
+        "/fcgi/OpenDoor", params={"action": "OpenDoor", "DoorNum": "1"}, follow_redirects=False
+    )
+    local.trigger_relay.assert_not_called()
+    web._config_set.assert_not_called()
+
+
+@pytest.mark.parametrize("mode,delay,trigger", [("1", "5", "0"), ("0", "6", "0"), ("0", "5", "1")])
+async def test_http_command_blocks_unapproved_timing(clients, mode, delay, trigger):
+    from pyakuvox.http_door import BASE, open_http_door
+
+    settings, local, web, after = clients
+    web._config_get.side_effect = [
+        after,
+        {BASE + "RelayADelay": delay, BASE + "RelayAMode": mode, BASE + "TriggerDelayA": trigger},
+    ]
+    with pytest.raises(DeviceError, match="pulse/mode"):
+        await open_http_door(settings, model="S535", relay_number=1, pulse_seconds=5)
+    local._client.get.assert_not_called()
+
+
+async def test_http_command_timeout_never_retries(clients):
+    from pyakuvox.http_door import BASE, open_http_door
+
+    settings, local, web, after = clients
+    web._config_get.side_effect = [
+        after,
+        {BASE + "RelayADelay": "5", BASE + "RelayAMode": "0", BASE + "TriggerDelayA": "0"},
+    ]
+    local._client.get.side_effect = TimeoutError("secret response")
+    with pytest.raises(AmbiguousMutationError, match="reconcile") as error:
+        await open_http_door(settings, model="S535", relay_number=1, pulse_seconds=5)
+    assert "secret" not in str(error.value)
+    assert local._client.get.await_count == 1
+    local.trigger_relay.assert_not_called()
+
+
+@pytest.mark.parametrize("status", [200, 302, 503, "timeout"])
+async def test_http_transport_uses_digest_and_never_retries(status):
+    import httpx
+
+    from pyakuvox.http_door import BASE, open_http_door
+
+    settings = LocalSettings(
+        host="panel.example.test",
+        port=443,
+        use_ssl=True,
+        verify_ssl=True,
+        username="test-user",
+        password="test-password",
+        auth_type="digest",
+    )
+    web = AsyncMock()
+    web.__aenter__.return_value = web
+    web._config_get.return_value = {
+        BASE + "RelayADelay": "5",
+        BASE + "RelayAMode": "0",
+        BASE + "TriggerDelayA": "0",
+    }
+    requests = []
+    real_client = httpx.AsyncClient
+
+    def respond(request):
+        requests.append(request)
+        if not request.headers.get("authorization"):
+            return httpx.Response(
+                401, headers={"WWW-Authenticate": 'Digest realm="panel", nonce="fixed", qop="auth"'}
+            )
+        if status == "timeout":
+            raise httpx.ReadTimeout("unknown outcome")
+        return httpx.Response(status, text="Success", headers={"Location": "/login"})
+
+    def client(**kwargs):
+        return real_client(**kwargs, transport=httpx.MockTransport(respond))
+
+    with (
+        patch("pyakuvox.http_door.configure_http_door", AsyncMock(return_value={"verified": True})),
+        patch("pyakuvox.http_door.WebApiClient", return_value=web),
+        patch("httpx.AsyncClient", side_effect=client),
+    ):
+        if status == 200:
+            assert (
+                await open_http_door(settings, model="S535", relay_number=1, pulse_seconds=5)
+            ).success
+        else:
+            with pytest.raises(AmbiguousMutationError):
+                await open_http_door(settings, model="S535", relay_number=1, pulse_seconds=5)
+    assert len(requests) == 2  # one authentication challenge, one authenticated submission
+    assert requests[-1].headers["authorization"].startswith("Digest ")
+    assert all(r.method == "GET" and r.url.path == "/fcgi/OpenDoor" for r in requests)
+    assert all(
+        "test-password" not in str(r.url) and "test-user" not in str(r.url) for r in requests
+    )
