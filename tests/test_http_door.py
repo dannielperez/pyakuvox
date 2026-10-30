@@ -118,7 +118,18 @@ async def test_insecure_transport_does_not_connect(clients, change):
     web.login.assert_not_called()
 
 
-@pytest.mark.parametrize("reply", ["Success", "<html>Login</html>", "", "OK"])
+@pytest.mark.parametrize(
+    "reply",
+    [
+        '{"retcode":0, "message":"OK"}',
+        "Success",
+        "<html>Login</html>",
+        "",
+        "OK",
+        '{"retcode":false,"message":"OK"}',
+        '{"retcode":1,"message":"OK"}',
+    ],
+)
 async def test_http_command_is_single_and_requires_explicit_ack(clients, reply):
     from pyakuvox.http_door import BASE, open_http_door
 
@@ -128,7 +139,7 @@ async def test_http_command_is_single_and_requires_explicit_ack(clients, reply):
         {BASE + "RelayADelay": "5", BASE + "RelayAMode": "0", BASE + "TriggerDelayA": "0"},
     ]
     local._client.get.return_value = SimpleNamespace(status_code=200, text=reply)
-    if reply == "Success":
+    if reply == '{"retcode":0, "message":"OK"}':
         result = await open_http_door(settings, model="S535", relay_number=1, pulse_seconds=5)
         assert result.success
         assert "physical position unverified" in result.message
@@ -205,7 +216,9 @@ async def test_http_transport_uses_digest_and_never_retries(status):
             )
         if status == "timeout":
             raise httpx.ReadTimeout("unknown outcome")
-        return httpx.Response(status, text="Success", headers={"Location": "/login"})
+        return httpx.Response(
+            status, text='{"retcode":0, "message":"OK"}', headers={"Location": "/login"}
+        )
 
     def client(**kwargs):
         return real_client(**kwargs, transport=httpx.MockTransport(respond))

@@ -7,7 +7,9 @@ remain untouched. Configuration allows selecting visible A/B/C for preparation.
 Execution admits Relay A only, checks hold5 against requested pulse, mode0 and
 trigger delay0, and sends one authenticated HTTPS OpenDoor request without retry,
 redirect or fallback. Unknown firmware, relay inventory, credentials and replies
-fail closed. S535 retains its separate schema and literal Success contract.
+fail closed. S535 retains its separate configuration schema. A subsequent live S535
+535.30.10.282 test returned the same JSON acknowledgement, correcting the old
+synthetic-only literal Success assumption for both firmware versions.
 
 Live S539 preparation readback succeeded. Two deliberately separated, audited
 Relay A field tests returned the same 29-byte JSON acknowledgement:
@@ -18,6 +20,6 @@ was a separate acceptance request after reviewing that cycle, not an automatic
 retry. The parser requires exact keys, integer zero and message OK. It does not
 interpret HTTP200, JSON false, an error, or a login page as success.
 
-532 SDK tests passed; changed files Ruff/format checks pass. No physical tests
+535 SDK tests passed; changed files Ruff/format checks pass. No physical tests
 of B/C; no claim of gate-position feedback or automatic vehicle authorization.
 Consumers must retain audit, deduplication, fresh arrival and site/lane controls.

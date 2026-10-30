@@ -198,17 +198,15 @@ async def open_http_door(
                 follow_redirects=False,
             )
             # Do not mistake a login page or arbitrary HTTP 200 for an ack.
-            acknowledged = response.text.strip() == "Success"
-            if model.upper() == "S539":
-                # Captured on 539.30.10.523 together with a camera-observed gate cycle.
-                payload = json.loads(response.text) if len(response.text) <= 256 else None
-                acknowledged = (
-                    isinstance(payload, dict)
-                    and set(payload) == {"retcode", "message"}
-                    and type(payload["retcode"]) is int
-                    and payload["retcode"] == 0
-                    and payload["message"] == "OK"
-                )
+            # Captured on both verified firmware versions with physical gate evidence.
+            payload = json.loads(response.text) if len(response.text) <= 256 else None
+            acknowledged = (
+                isinstance(payload, dict)
+                and set(payload) == {"retcode", "message"}
+                and type(payload["retcode"]) is int
+                and payload["retcode"] == 0
+                and payload["message"] == "OK"
+            )
             if response.status_code != 200 or not acknowledged:
                 raise AmbiguousMutationError(
                     "HTTP-door response is unverified; do not retry the physical command"
