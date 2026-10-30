@@ -121,3 +121,64 @@ async def configure_http_door(
                 "HTTP-door configuration attempted; reconcile readback before retrying"
             ) from None
         raise
+
+
+async def open_http_door(
+    settings: LocalSettings, *, model: str, relay_number: int, pulse_seconds: int
+):
+    """Issue one authenticated HTTP-door command after fresh configuration checks.
+
+    The device controls the pulse duration. Only the observed S535 Relay A
+    configuration is admitted. An acknowledgement does not prove gate position.
+    Unknown responses and transport failures are ambiguous; never retry/fallback.
+    """
+    from pyakuvox.models.events import RelayActionResult
+
+    if type(relay_number) is not int or relay_number != 1:
+        raise ValueError("Only verified Relay A is supported")
+    if type(pulse_seconds) is not int or not 1 <= pulse_seconds <= 60:
+        raise ValueError("Invalid pulse duration")
+    ready = await configure_http_door(
+        settings, model=model, relay_numbers=(relay_number,), apply=False
+    )
+    if not ready["verified"]:
+        raise DeviceError("HTTP-door configuration is not verified")
+    options = dict(
+        host=settings.host,
+        port=settings.port,
+        use_ssl=True,
+        verify_ssl=True,
+        timeout=min(float(settings.timeout), 5.0),
+        tls_certificate_sha256=settings.tls_certificate_sha256,
+    )
+    async with WebApiClient(**options) as web:
+        await web.login(settings.username, settings.password.get_secret_value())
+        keys = [BASE + k for k in ("RelayADelay", "RelayAMode", "TriggerDelayA")]
+        raw = await web._config_get(keys)
+        if [raw.get(k) for k in keys] != [str(pulse_seconds), "0", "0"]:
+            raise DeviceError("HTTP-door pulse/mode does not match the approved output")
+    async with LocalClient(settings, max_retries=0) as client:
+        try:
+            # This GET mutates hardware: bypass the generic retrying GET helper.
+            # Auth stays in headers; credentials never enter the URL.
+            response = await client._client.get(
+                "/fcgi/OpenDoor",
+                params={"action": "OpenDoor", "DoorNum": "1"},
+                follow_redirects=False,
+            )
+            # Do not mistake a login page or arbitrary HTTP 200 for an ack.
+            if response.status_code != 200 or response.text.strip() != "Success":
+                raise AmbiguousMutationError(
+                    "HTTP-door response is unverified; do not retry the physical command"
+                )
+        except (Exception, asyncio.CancelledError):
+            raise AmbiguousMutationError(
+                "HTTP-door command attempted; reconcile physical outcome before retrying"
+            ) from None
+    return RelayActionResult(
+        relay_number=relay_number,
+        success=True,
+        delay_seconds=pulse_seconds,
+        source="local",
+        message="HTTP-door acknowledgement; physical position unverified",
+    )
