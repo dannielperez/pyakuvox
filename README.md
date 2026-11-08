@@ -338,3 +338,22 @@ or retries a write, and reports verification separately from submission. A
 concurrent change between the final read and device write remains possible;
 this is not an atomic device-side compare-and-swap. Confirm real-world audibility
 with a call after a verified change. Other firmware is refused until validated.
+
+### Video configuration proposals
+
+`pyakuvox.video` provides typed `VideoIntent`, bounded
+`read_video_configuration`, pure `inspect_video_configuration`,
+`plan_video_configuration`, `compare_video_configuration`, and
+`plan_video_rollback` operations. S535 535.30.10.282 and S539 539.30.10.523
+have observed read surfaces; other firmware returns unsupported.
+
+Plans contain only codec enable/priority and two-way-video changes. Omitted
+values preserve existing settings. Empty device flags remain unknown and block
+recoverable changes. Serialize the plan as recovery material in the consumer's
+protected storage; it never contains passwords or a full-device backup.
+Rollback planning checks device/account identity and protected settings and
+rejects intervening edits. It is not a certified restoration procedure.
+
+This API is intentionally read-only: `application_supported` is false and
+restart requirements are unknown until separately approved hardware validation.
+No method applies a patch, changes credentials, starts a call, or restarts a panel.
