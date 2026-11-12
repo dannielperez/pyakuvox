@@ -1,7 +1,9 @@
-"""Read-only video configuration plans. No device mutation or call initiation.
+"""Video configuration plans and their guarded, verified application.
 
-Mappings are limited to firmware with observed configuration surfaces. This does
-not certify write semantics, reboot persistence, or live media interoperability.
+Mappings are limited to firmware with observed configuration surfaces. Planning
+never mutates a device. ``apply_video_plan`` writes only a reviewed plan, and
+only for model/firmware pairs whose write, readback, persistence and restart
+behavior were validated on hardware (``_WRITE_VALIDATED``, empty until then).
 Recovery material contains only the exact non-secret fields in a proposed patch.
 """
 
@@ -17,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from pyakuvox.exceptions import (
     AkuvoxError,
+    AmbiguousMutationError,
     ApiAccessForbiddenError,
     AuthenticationError,
 )
@@ -26,6 +29,7 @@ from pyakuvox.exceptions import (
 from pyakuvox.exceptions import (
     TimeoutError as DeviceTimeoutError,
 )
+from pyakuvox.sip_recovery import _call_state, _mac
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -106,6 +110,19 @@ class Drift(Record):
 
 _SURFACES = {("S535", "535.30.10.282"): ("H264",), ("S539", "539.30.10.523"): ("H264", "H263")}
 _TWO_WAY = "Config.Features.TWOWAYVIDEO.Enable"
+# (model, firmware) pairs whose config write, readback, reboot persistence and
+# restart need were validated on a non-production panel. Adding one is a
+# reviewed change carrying that evidence; nothing is validated yet.
+_WRITE_VALIDATED: frozenset[tuple[str, str]] = frozenset()
+_IDENTITY_FIELDS = (
+    "model",
+    "firmware",
+    "mac",
+    "account",
+    "identity",
+    "registrar",
+    "protected_fingerprint",
+)
 
 
 def _truth(value: object) -> Truth:
@@ -253,6 +270,7 @@ def plan_video_configuration(observed: VideoObservation, intent: VideoIntent) ->
         blockers=tuple(blockers),
         recovery_ready=not blockers
         and bool(observed.mac and observed.identity and observed.registrar),
+        application_supported=(observed.model, observed.firmware) in _WRITE_VALIDATED,
     )
 
 
@@ -274,16 +292,7 @@ def plan_video_rollback(plan: VideoPlan, current: VideoObservation) -> VideoPlan
     before = plan.baseline
     if not plan.recovery_ready or current.outcome is not Outcome.OBSERVED:
         return VideoPlan(baseline=current, blockers=("Recovery baseline unavailable",))
-    identity_fields = (
-        "model",
-        "firmware",
-        "mac",
-        "account",
-        "identity",
-        "registrar",
-        "protected_fingerprint",
-    )
-    if any(getattr(before, key) != getattr(current, key) for key in identity_fields):
+    if any(getattr(before, key) != getattr(current, key) for key in _IDENTITY_FIELDS):
         return VideoPlan(
             baseline=current, blockers=("Identity or protected configuration changed",)
         )
@@ -293,6 +302,7 @@ def plan_video_rollback(plan: VideoPlan, current: VideoObservation) -> VideoPlan
     return VideoPlan(
         baseline=current,
         recovery_ready=True,
+        application_supported=plan.application_supported,
         changes=tuple(
             Change(key=c.key, before=c.after, after=c.before)
             for c in plan.changes
@@ -332,3 +342,94 @@ async def read_video_configuration(
     except (AkuvoxError, ValueError, TypeError, AttributeError):
         outcome = Outcome.ERROR
     return VideoObservation(outcome=outcome, account=account)
+
+
+class VideoWriter(VideoReader, Protocol):
+    async def set_config(self, settings: dict[str, str]) -> None: ...
+    async def _get(self, path: str) -> Any: ...
+
+
+class VideoApplyResult(Record):
+    verdict: str  # no-change, set-verified, verification-failed
+    applied: bool = False
+    verified: bool = False
+    changes: tuple[Change, ...] = ()
+    observed: tuple[tuple[str, str], ...] = ()
+    restart_required: str = "unknown"
+
+
+def _refuse(reason: str) -> ValueError:
+    return ValueError(f"Video change refused: {reason}; no change sent")
+
+
+async def apply_video_plan(
+    client: VideoWriter, plan: VideoPlan, *, expected_mac: str, timeout: float = 30
+) -> VideoApplyResult:
+    """Write one reviewed plan's exact changes once, then verify by readback.
+
+    Applies a forward plan or a ``plan_video_rollback`` result alike. Refuses,
+    sending nothing, unless the pair is hardware-validated, the client does not
+    retry, the panel is idle, and a fresh read still matches the plan's identity,
+    protected settings and every ``before`` value. Never reboots and never
+    restores on its own: after a failed verification, read again, then plan and
+    apply a rollback. Once the write starts, an unknown outcome raises
+    ``AmbiguousMutationError``. A concurrent change between the final read and
+    the write remains possible; this is not a device-side compare-and-swap.
+    An external controller must serialize this with other device mutations.
+    """
+    if not 0 < timeout <= 60:
+        raise ValueError("timeout must be between 0 and 60 seconds")
+    base = plan.baseline
+    if (base.model, base.firmware) not in _WRITE_VALIDATED:
+        raise _refuse("write contract not validated on hardware for this model/firmware")
+    if getattr(client, "_max_retries", None) != 0:
+        raise _refuse("a non-retrying client is required")
+    if plan.blockers or not plan.recovery_ready:
+        raise _refuse("the plan has blockers or no recovery baseline")
+    if len(_mac(expected_mac)) != 12 or _mac(expected_mac) != _mac(base.mac):
+        raise _refuse("device identity is not the approved device")
+    names = _SURFACES.get((base.model, base.firmware), ())
+    allowed = {
+        f"Config.Account{base.account}.Video{slot:02d}.{suffix}"
+        for slot in range(len(names))
+        for suffix in ("Enable", "Priority")
+    } | {_TWO_WAY}
+    if any(c.key not in allowed for c in plan.changes):
+        raise _refuse("the plan touches a field outside the video surface")
+    if not plan.changes:
+        return VideoApplyResult(verdict="no-change", verified=True, observed=base.values)
+    write_started = False
+    try:
+        async with asyncio.timeout(timeout):
+            if _call_state(await client._get("/api/call/status")) != "READY":
+                raise _refuse("panel call state is active or unknown")
+            current = await read_video_configuration(client, account=base.account)
+            if current.outcome is not Outcome.OBSERVED or any(
+                getattr(base, key) != getattr(current, key) for key in _IDENTITY_FIELDS
+            ):
+                raise _refuse("identity or protected configuration changed")
+            now = dict(current.values)
+            if any(now.get(c.key) != c.before for c in plan.changes):
+                raise _refuse("a planned field changed since the plan; review a fresh plan")
+            write_started = True
+            await client.set_config({c.key: c.after for c in plan.changes})
+            after = await read_video_configuration(client, account=base.account)
+    except Exception as exc:
+        if write_started:
+            raise AmbiguousMutationError(
+                "Video change outcome unknown; read current configuration before retrying"
+            ) from exc
+        raise
+    expected = {**now, **{c.key: c.after for c in plan.changes}}
+    verified = (
+        after.outcome is Outcome.OBSERVED
+        and all(getattr(base, key) == getattr(after, key) for key in _IDENTITY_FIELDS)
+        and dict(after.values) == expected
+    )
+    return VideoApplyResult(
+        verdict="set-verified" if verified else "verification-failed",
+        applied=True,
+        verified=verified,
+        changes=plan.changes,
+        observed=after.values,
+    )

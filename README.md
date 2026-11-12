@@ -354,6 +354,24 @@ protected storage; it never contains passwords or a full-device backup.
 Rollback planning checks device/account identity and protected settings and
 rejects intervening edits. It is not a certified restoration procedure.
 
-This API is intentionally read-only: `application_supported` is false and
-restart requirements are unknown until separately approved hardware validation.
-No method applies a patch, changes credentials, starts a call, or restarts a panel.
+`apply_video_plan(client, plan, expected_mac=...)` writes one reviewed plan's
+exact changes (a forward plan or a `plan_video_rollback` result) in a single
+config write, then verifies them by readback. It sends nothing unless the
+model/firmware pair is hardware-validated, the client does not retry
+(`max_retries=0`), the panel's call state is `READY`, and a fresh read still
+matches the plan's identity, protected settings and every `before` value. It
+never reboots and never restores on its own; an unknown outcome after the write
+starts raises `AmbiguousMutationError`, and a failed verification is reported,
+not retried. The read-before-write check is not device-side compare-and-swap,
+so callers serialize device mutations.
+
+No pair is hardware-validated yet, so `application_supported` stays false and
+every apply is refused. Validating a pair (write, readback, persistence across a
+reboot, whether a restart is needed, and the rollback) on a non-production panel
+is a separate reviewed change that adds it to `_WRITE_VALIDATED`. No method
+changes credentials, starts a call, or restarts a panel.
+
+Akuvox documents two-way video as letting the *door phone* show the called
+party's video (Intercom > Basic > Two-Way Video). Receiving the panel's video at
+the called party does not depend on it; the account's H.264 codec and its Video
+Transport Type (Account > Advanced > Call; S535 default "Send Only") do.
