@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Added — guarded video plan application
+- `video.apply_video_plan` writes a reviewed plan's exact codec / two-way changes once and verifies by readback. It refuses without sending when the hardware contract is unvalidated, the client retries, the panel is not idle, or identity, protected settings or any planned `before` value changed. No reboot, no automatic restore; unknown outcomes raise `AmbiguousMutationError`.
+- Rollback is the same call with a `plan_video_rollback` result.
+- `_WRITE_VALIDATED` is empty: no model/firmware is validated yet, so `application_supported` stays false and every apply is refused until a reviewed hardware validation adds a pair.
+
 ### Added — idle-only SIP flow recovery
 - `sip_recovery.inspect_sip` returns allowlisted account, identity and call-state evidence.
 - `renew_udp_flow` observes 60 seconds of idle, changes only one enabled UDP account’s fixed local port, and verifies registration. Requires a non-retrying client and an external device mutex.
