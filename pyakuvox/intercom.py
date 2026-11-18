@@ -209,7 +209,67 @@ def require_s535_intercom_surface(config: dict[str, Any], wants: dict[str, str])
         raise DeviceError("S535 intercom configuration fields are unavailable")
 
 
+def r29c_intercom_config(configuration: IntercomConfiguration) -> dict[str, str]:
+    """R29C six-key theme and A/B/C/security relay map (29.30.10 firmware).
+
+    Its Null key is 7, not X916's 6 (which opens a relay on this model).
+    Security-relay enablement and existing physical wiring are preserved.
+    """
+    if len(configuration.homepage_keys) != 6:
+        raise ValueError("R29C requires six homepage keys")
+    if len(configuration.relay_dtmf_codes) != 4:
+        raise ValueError("R29C requires codes for A, B, C and security relay A")
+    if configuration.name_visibility_required or configuration.building_display_required:
+        raise ValueError("R29C does not expose X916 name/building controls")
+    display = "Config.DoorSetting.DISPLAY"
+    relay = "Config.DoorSetting.RELAY"
+    dtmf = "Config.DoorSetting.DTMF"
+    wants = {
+        "Config.DoorSetting.GENERAL.Theme": "2",
+        f"{dtmf}.Enable": "1",
+        f"{dtmf}.Option": "0",
+        f"{dtmf}.WhitelistEnable": "1" if configuration.allow_dtmf_from_all_numbers else "0",
+    }
+    types = {
+        IntercomKeyType.SPEED_DIAL: "5",
+        IntercomKeyType.PIN: "2",
+        IntercomKeyType.DISABLED: "7",
+    }
+    for slot, key in enumerate(configuration.homepage_keys, 1):
+        wants.update(
+            {
+                f"{display}.Key{slot}Type": types[key.key_type],
+                f"{display}.Key{slot}Label": key.label,
+                f"{display}.Key{slot}Number": key.value,
+            }
+        )
+    for suffix, code_key, code in zip(
+        ("A", "B", "C", "SA"),
+        ("Code1", "Code2", "Code3", "CodeSA"),
+        configuration.relay_dtmf_codes,
+        strict=True,
+    ):
+        wants[f"{dtmf}.{code_key}"] = code
+        wants[f"{relay}.TriggerDelay{suffix}"] = "0"
+        wants[f"{relay}.HoldDelay{suffix}"] = str(configuration.relay_hold_seconds)
+        if suffix != "SA":
+            wants[f"{relay}.Mode{suffix}"] = "0"
+            wants[f"{relay}.Type{suffix}"] = "0"
+    return wants
+
+
+def require_r29c_intercom_surface(config: dict[str, Any], wants: dict[str, str]) -> None:
+    if any(key not in config for key in wants):
+        raise DeviceError("R29C intercom configuration fields are unavailable")
+
+
 _INTERCOM_ADAPTERS = {
+    "R29C": IntercomAdapter(
+        model="R29C",
+        transport="digest-config-api",
+        build_config=r29c_intercom_config,
+        validate_surface=require_r29c_intercom_surface,
+    ),
     "S535": IntercomAdapter(
         model="S535",
         transport="digest-config-api",

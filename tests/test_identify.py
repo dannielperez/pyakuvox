@@ -240,3 +240,12 @@ def test_configured_https_digest_custom_port():
     assert ident.headless_manageable
     assert ident.port == 8443
     assert ident.use_ssl
+
+
+@pytest.mark.parametrize("model", ["R29", "R29C"])
+def test_r29_family_has_native_sip_status_strategy(model):
+    from pyakuvox.identify import SIPStatusSource, profile_for_model
+
+    profile = profile_for_model(model)
+    assert profile.sip_status_source is SIPStatusSource.FCGI_WEB
+    assert profile.config_password_encodings == ("r29c",)
