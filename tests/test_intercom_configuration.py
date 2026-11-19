@@ -286,3 +286,37 @@ def test_s535_rejects_unrepresentable_keys_and_missing_surface_before_write():
     result = run(device(client).ensure_intercom_configuration(requested, apply=True))
     assert result["verdict"] == "unsupported-firmware"
     assert not client.sets
+
+
+def test_r29c_uses_its_own_key_and_relay_map():
+    from dataclasses import replace
+
+    from pyakuvox.intercom import r29c_intercom_config
+
+    config = replace(
+        requested_configuration(), name_visibility_required=False, building_display_required=False
+    )
+    wants = r29c_intercom_config(config)
+    assert wants["Config.DoorSetting.DISPLAY.Key3Type"] == "7"
+    assert wants["Config.DoorSetting.DISPLAY.Key1Type"] == "5"
+    assert wants["Config.DoorSetting.DTMF.WhitelistEnable"] == "1"
+    assert wants["Config.DoorSetting.DTMF.CodeSA"] == "4"
+    assert not any(
+        "ModeD" in k or "BuildingDisplay" in k or "SecurityRelayAEnabled" in k for k in wants
+    )
+    client = FakeClient(dict.fromkeys(wants, "old"), model="R29C")
+    result = run(device(client).ensure_intercom_configuration(config, apply=True))
+    assert result["verdict"] is IntercomConfigurationVerdict.SET_VERIFIED
+    assert len(client.sets) == 1
+
+
+def test_r29c_missing_surface_never_writes():
+    from dataclasses import replace
+
+    config = replace(
+        requested_configuration(), name_visibility_required=False, building_display_required=False
+    )
+    client = FakeClient({}, model="R29C")
+    result = run(device(client).ensure_intercom_configuration(config, apply=True))
+    assert result["verdict"] is IntercomConfigurationVerdict.UNSUPPORTED_FIRMWARE
+    assert client.sets == []

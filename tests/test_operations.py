@@ -90,3 +90,19 @@ async def test_native_homepage_account_model_dispatch(model):
         result = await ensure_homepage_dial_account(settings, 2, model=model, apply=True)
     assert result["verdict"] == "set-verified"
     client.ensure_fcgi_homepage_dial_account.assert_awaited_once_with(2, apply=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["R29", "R29C"])
+async def test_r29_status_uses_native_fcgi_account_reader(model):
+    client = AsyncMock()
+    client.__aenter__.return_value = client
+    expected = SIPAccountStatus(2, "700", "192.0.2.11", SIPRegistrationStatus.REGISTERED, "2")
+    client.get_sip_account_status.return_value = expected
+    with patch("pyakuvox.operations.WebUIClient", return_value=client) as factory:
+        result = await read_sip_account_status(
+            "192.0.2.241", 2, username="admin", password="fixture", model=model
+        )
+    assert result is expected
+    assert factory.call_args.kwargs["password_encoding"] == ConfigPasswordEncoding.R29C
+    client.get_sip_account_status.assert_awaited_once_with(2)

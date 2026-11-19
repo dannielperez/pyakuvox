@@ -85,7 +85,16 @@ _UNKNOWN_PROFILE = DeviceProfile(family="unknown", dialect=ApiDialect.UNKNOWN)
 # Prefix match (case-insensitive); first hit wins, so longer prefixes come first.
 _MODEL_PROFILES: list[tuple[str, DeviceProfile]] = [
     ("S5", DeviceProfile("S5", ApiDialect.WEB_API, (("https", 443),))),
-    ("R29C", DeviceProfile("R29C", ApiDialect.WEB_API, (("http", 80), ("https", 443)))),
+    (
+        "R29C",
+        DeviceProfile(
+            "R29C",
+            ApiDialect.WEB_API,
+            (("http", 80), ("https", 443)),
+            ("r29c",),
+            SIPStatusSource.FCGI_WEB,
+        ),
+    ),
     ("E18", DeviceProfile("E18", ApiDialect.LEGACY_WEB, (("http", 80),))),
     (
         "X916",
@@ -97,7 +106,16 @@ _MODEL_PROFILES: list[tuple[str, DeviceProfile]] = [
             SIPStatusSource.FCGI_WEB,
         ),
     ),
-    ("R29", DeviceProfile("R29", ApiDialect.DIGEST_API, (("http", 80),))),
+    (
+        "R29",
+        DeviceProfile(
+            "R29",
+            ApiDialect.DIGEST_API,
+            (("http", 80),),
+            ("r29c",),
+            SIPStatusSource.FCGI_WEB,
+        ),
+    ),
     ("R27", DeviceProfile("R27", ApiDialect.DIGEST_API, (("http", 80),))),
     ("A05", DeviceProfile("A05", ApiDialect.DIGEST_API, (("http", 80),))),
 ]
